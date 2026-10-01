@@ -312,6 +312,21 @@ cursor leaks, and attribution:
 pnpm build && node scripts/legal-gate.mjs <skill-dir> --book <id> [--book <id>…]
 ```
 
+### Companion skill: calibre-tutor
+
+A live, one-on-one tutoring session on a chapter or topic from your library, modeled on
+Harvard's PS2 Pal RCT ([Kestin et al., *Sci Rep* 15, 17458, 2025](https://www.nature.com/articles/s41598-025-97652-6)).
+Before teaching, it reads the chapter and builds a hidden lesson plan — objectives, one
+activity each with a step-by-step reference answer, likely misconceptions and a source
+cursor — plus a pre-written post-test. It then runs a pre-test, walks you through the
+activities strictly in order with a hint ladder (nudge → hint → one step → full solution
+only on request), checks your answers against the reference rather than its own recall,
+and grounds any dispute in the book passage. Ends with a pre/post score and hands off to
+`calibre-study-notes` for spaced review. Ships at [`skills/calibre-tutor/`](./skills/calibre-tutor);
+installed by the same skills.sh / plugin / symlink paths as above.
+
+Then ask, e.g., *“tutor me through the consumer-groups chapter of book 187.”*
+
 ## ⚙️ Configuration
 
 Everything is optional — with a running Content Server on the default port, zero config

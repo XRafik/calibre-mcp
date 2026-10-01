@@ -6,6 +6,14 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **`calibre-tutor` companion skill.** Live tutoring session on a chapter/topic, modeled on
+  the Harvard PS2 Pal RCT: hidden lesson plan with step-by-step reference answers and source
+  cursors, pre/post test, strictly sequential activities with a hint ladder, answers checked
+  against the reference and disputes grounded in the book. Hands off to
+  `calibre-study-notes` for spaced review.
+
 ## [0.7.4] — 2026-08-21
 
 ### Added
