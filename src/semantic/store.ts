@@ -496,7 +496,9 @@ export class SqliteIndexStore implements IndexStore {
     // Pull a generous pool of chunk hits, then keep the best (first, since bm25-ranked) per book.
     const pool = Math.max(k * 20, 200);
     // The allow filter lives in SQL (json_each keeps it to one variable) so a small bundle
-    // can't be starved by the pool cap eating unfiltered hits first.
+    // can't be starved by the pool cap eating unfiltered hits first. It uses the same FTS-first
+    // CTE as searchBookFts: ~9 s → <0.8 s on stop-word-heavy queries, neutral otherwise. The
+    // unfiltered branch keeps the plain JOIN — the CTE measured no gain there.
     const rows = (
       allow === undefined
         ? db
@@ -508,10 +510,13 @@ export class SqliteIndexStore implements IndexStore {
             .all(match, pool)
         : db
             .prepare(
-              `SELECT c.id AS chunk_id, c.book_id, c.char_start, c.char_end, c.body, ${WEIGHTED_BM25} AS score
-               FROM chunk_fts JOIN chunks c ON c.id = chunk_fts.rowid
-               WHERE chunk_fts MATCH ? AND c.book_id IN (SELECT value FROM json_each(?))
-               ORDER BY score LIMIT ?`,
+              `WITH m AS MATERIALIZED (
+                 SELECT rowid AS id, ${WEIGHTED_BM25} AS s FROM chunk_fts WHERE chunk_fts MATCH ?
+               )
+               SELECT c.id AS chunk_id, c.book_id, c.char_start, c.char_end, c.body, m.s AS score
+               FROM m JOIN chunks c ON c.id = m.id
+               WHERE c.book_id IN (SELECT value FROM json_each(?))
+               ORDER BY m.s LIMIT ?`,
             )
             .all(match, JSON.stringify([...allow]), pool)
     ) as Row[];
@@ -543,11 +548,17 @@ export class SqliteIndexStore implements IndexStore {
     const db = this.#db(libraryId);
     const match = ftsMatch(stemmedQuery);
     if (!match) return [];
+    // FTS-first: with a plain JOIN the planner drives from idx_chunks_book and re-runs the
+    // OR-ed MATCH per chunk (1.7–250 s on a 313k-chunk index); a MATERIALIZED CTE evaluates
+    // MATCH once, then filters by book. Same rows, same bm25 scores.
     const rows = db
       .prepare(
-        `SELECT c.id AS chunk_id, c.char_start, c.char_end, c.body, c.front_matter, ${WEIGHTED_BM25} AS score
-         FROM chunk_fts JOIN chunks c ON c.id = chunk_fts.rowid
-         WHERE chunk_fts MATCH ? AND c.book_id = ? ORDER BY score LIMIT ?`,
+        `WITH m AS MATERIALIZED (
+           SELECT rowid AS id, ${WEIGHTED_BM25} AS s FROM chunk_fts WHERE chunk_fts MATCH ?
+         )
+         SELECT c.id AS chunk_id, c.char_start, c.char_end, c.body, c.front_matter, m.s AS score
+         FROM m JOIN chunks c ON c.id = m.id
+         WHERE c.book_id = ? ORDER BY m.s LIMIT ?`,
       )
       .all(match, bookId, k) as Row[];
     return rows.map((r) => ({
