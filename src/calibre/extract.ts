@@ -396,11 +396,22 @@ function hashKey(key: string): string {
   return createHash("sha256").update(key).digest("hex").slice(0, 32);
 }
 
+/**
+ * Cache entries the LRU sweep may delete: .txt = legacy extracted text, .json = text
+ * envelopes + fg-*.json figure inventories (same LRU pool, D-018). Per-call temp files
+ * (`tx-`/`dl-`/`fx-`/`ep-` and `fg-<uuid>.txt`) are excluded — under a concurrent build
+ * (#99) they belong to ANOTHER book still converting, and deleting one fails that book.
+ */
+export function isEvictableCacheFile(name: string): boolean {
+  if (/^(tx|dl|fx|ep)-/.test(name)) return false;
+  if (name.startsWith("fg-") && name.endsWith(".txt")) return false;
+  return name.endsWith(".txt") || name.endsWith(".json");
+}
+
 /** LRU sweep: drop oldest cache files when over the entry/byte caps. Best-effort. */
 async function evictCache(): Promise<void> {
   const names = await readdir(CACHE_DIR).catch(() => [] as string[]);
-  // .txt = extracted text; fg-*.json = figure inventories (same LRU pool, D-018).
-  const files = names.filter((n) => n.endsWith(".txt") || n.endsWith(".json"));
+  const files = names.filter(isEvictableCacheFile);
   const entries = await Promise.all(
     files.map(async (n) => {
       const p = path.join(CACHE_DIR, n);

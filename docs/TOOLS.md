@@ -249,7 +249,7 @@ it's safe to run without enabling library writes.
 |---|---|---|---|
 | `bookId` | number \| uuid | — | A single book to index |
 | `ids` | array of ids | — | Several books to index |
-| `query` | string | — | Index all books matching a Calibre query (capped at 100) |
+| `query` | string | — | Index every book matching a Calibre query (no cap) |
 | `library` | string | *(default)* | Library name or id |
 | `force` | boolean | `false` | Re-index books even if unchanged |
 | `keywordOnly` | boolean | `false` | Build a keyword-only index (no embedding model needed) |
