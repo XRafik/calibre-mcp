@@ -29,5 +29,48 @@
   "liveEval": {
     "$comment": "Before/after diff on the real library is a mandatory triage artifact, NOT a gate — live-relevance.json labels are unverified and the re-index mixes markers + figures + D-016 demotion.",
     "gate": false
+  },
+  "rrfWeightSweep": {
+    "$comment": "#142 weighted-RRF sweep gates, declared + committed BEFORE the sweep (D-012 protocol). Sweep: VECTOR_RRF_WEIGHT in {1.0,1.25,1.5,2.0}, KEYWORD_RRF_WEIGHT fixed 1.0, same weights at all three fusion sites (chunk/book/figure), e5-small, hybrid mode. Three measurements per weight: fixtureOn (fixture, reranker ON = shipped default), fixtureOff (fixture, --rerank off = the fused order users get when the reranker is unavailable/busy/disabled, #156; isolates fusion), liveOn (real library index copy, reranker ON, UNVERIFIED live labels). Every delta is vs the SAME measurement at weight 1.0 (the re-measured baseline, not the pre-#97 D-012 numbers). Consumed by test/eval/retrieval/rrf-sweep.ts.",
+    "candidates": [1.0, 1.25, 1.5, 2.0],
+    "baselineWeight": 1.0,
+    "ruUp": {
+      "$comment": "RU must go UP where fusion has headroom. fixtureOn is expected to be weight-invariant (rerank pool >= whole fixture), so it only must not drop.",
+      "liveOn": {
+        "ruInvolvedNdcg10MinDelta": 0.01,
+        "crossLingualNdcg10MinDelta": 0.01
+      },
+      "fixtureOff": {
+        "ruInvolvedNdcg10MinDelta": 0.02,
+        "crossLingualNdcg10MinDelta": 0.02
+      },
+      "fixtureOn": {
+        "ruInvolvedNdcg10MinDelta": 0.0,
+        "crossLingualNdcg10MinDelta": 0.0
+      }
+    },
+    "enNonRegression": {
+      "$comment": "EN must not regress on the two keyword-favoured kinds. Fixture: per-kind hybrid nDCG@10 drop <= maxNdcg10Drop AND zero queries of these kinds losing Hit@1 vs weight 1.0. Live has no book-scope (front-matter-trap) rows; only exact-identifier is checked there, looser (7 queries, unverified labels).",
+      "kinds": ["exact-identifier", "front-matter-trap"],
+      "fixtureOn": {
+        "maxNdcg10Drop": 0.01,
+        "maxBrokenHit1Queries": 0
+      },
+      "fixtureOff": {
+        "maxNdcg10Drop": 0.01,
+        "maxBrokenHit1Queries": 0
+      },
+      "liveOn": {
+        "kinds": ["exact-identifier"],
+        "maxNdcg10Drop": 0.02,
+        "maxBrokenHit1Queries": 0
+      }
+    },
+    "zeroBroken": {
+      "$comment": "The existing nonRegression gate (thresholds.nonRegression vs baselineReport) must stay green on fixtureOn, hybrid rows — vector/keyword do not depend on the RRF weights.",
+      "reusesGate": "nonRegression",
+      "modes": ["hybrid"]
+    },
+    "selection": "Among weights passing ALL gates pick the max liveOn RU-involved nDCG@10; ties -> the smaller weight (least departure from plain RRF). No passing weight != 1.0 -> '1.0 stays'. If RU gates pass only at weights that fail EN gates -> report the need for query-adaptive weighting and STOP (non-goal to build it)."
   }
 }
