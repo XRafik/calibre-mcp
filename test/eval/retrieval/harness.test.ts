@@ -14,6 +14,7 @@ const base = { indexDir: ":memory:", embedder: hashEmbedder } as const;
 function reversed(inner: IndexStore): IndexStore {
   return {
     hasIndex: (l) => inner.hasIndex(l),
+    indexMeta: (l) => inner.indexMeta(l),
     hasVectors: (l) => inner.hasVectors(l),
     isBookIndexed: (l, b, m) => inner.isBookIndexed(l, b, m),
     replaceBook: (l, m, c, f) => inner.replaceBook(l, m, c, f),

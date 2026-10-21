@@ -5,7 +5,7 @@ import { log } from "../../src/logging.js";
 import type { Embedder } from "../../src/semantic/embedder.js";
 import { RERANK_POOL, type Reranker } from "../../src/semantic/reranker.js";
 import { SqliteIndexStore } from "../../src/semantic/store.js";
-import { EMBED_DIM } from "../../src/semantic/model.js";
+import { EMBED_DIM, INDEX_VERSION } from "../../src/semantic/model.js";
 import { l2normalize } from "../../src/semantic/vector.js";
 import type { ToolDeps } from "../../src/tools/types.js";
 
@@ -167,6 +167,27 @@ describe("calibre_semantic_search handler", () => {
     expect(top).toMatchObject({ bookId: expect.any(Number), title: expect.any(String) });
     // The fenced snippet is carried so it survives clients that drop text content blocks.
     expect(top.snippet as string).toContain("UNTRUSTED");
+  });
+
+  it("stamps the index generation once on the envelope + one header line, not per hit (#136)", async () => {
+    for (const a of [args(), args({ scope: "book", bookId: 1 }), args({ mode: "keyword", query: "nomatchzzz" })]) {
+      const r = await semanticSearchTool.handler(a, deps(preloaded()));
+      expect(r.isError).toBeFalsy();
+      expect(r.structuredContent?.indexVersion).toBe(INDEX_VERSION);
+      const texts = r.content.filter((b) => b.type === "text").map((b) => (b as { text: string }).text);
+      expect(texts[0]).toContain(`indexVersion ${INDEX_VERSION}`);
+      expect(texts.filter((t) => t.includes("indexVersion")).length).toBe(1);
+      for (const hit of [...((r.structuredContent?.results as object[]) ?? []), ...((r.structuredContent?.passages as object[]) ?? [])]) {
+        expect(hit).not.toHaveProperty("indexVersion");
+      }
+    }
+  });
+
+  it("errors (no indexVersion stamp) when there is no index", async () => {
+    const empty = new SqliteIndexStore(loadConfig({ CALIBRE_MCP_INDEX_DIR: ":memory:" }));
+    const r = await semanticSearchTool.handler(args(), deps(empty));
+    expect(r.isError).toBe(true);
+    expect(r.structuredContent?.indexVersion).toBeUndefined();
   });
 
   it("book scope requires bookId", async () => {

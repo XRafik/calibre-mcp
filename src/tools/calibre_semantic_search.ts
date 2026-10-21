@@ -26,7 +26,7 @@ import { bookResourceLink } from "./resource-link.js";
 import { resolveNumericId } from "./resolve-id.js";
 import { INSTALL_TRANSFORMERS } from "./remediation.js";
 import { fence, toolError, toolOk } from "./result.js";
-import type { ContentBlock, ToolDeps } from "./types.js";
+import type { ContentBlock, ToolDeps, ToolResult } from "./types.js";
 
 /** Per-half candidate pool the fuser draws from (design: vector top-50 + keyword top-50). */
 const POOL = 50;
@@ -88,6 +88,9 @@ export const semanticSearchTool = defineTool({
     filter: z.string().optional(),
     exclusionsApplied: z.array(z.string()).optional(),
     bookIds: z.array(z.number()).optional(),
+    // Index generation that produced every location in this response (#136) — charStart/
+    // charEnd/charOffset/page are valid only within it; clients persisting citations pin to it.
+    indexVersion: z.number().optional(),
     // Ranked hits mirrored into structuredContent so structured-only clients (that render
     // structuredContent but drop text content blocks) still surface the snippets/passages.
     // scope=library → results (one per book); scope=book → passages (one per chunk). Free
@@ -151,6 +154,9 @@ export const semanticSearchTool = defineTool({
         );
       }
 
+      // Provenance for every location below (#136); read from the index's own meta.
+      const indexVersion = deps.index.indexMeta(libraryId)?.indexVersion;
+
       // A keyword-only index (built without the embedding model) has no vectors: vector mode
       // can't run, and hybrid degrades to keyword (degrading beats erroring for the default).
       // Every success carries semanticAvailable (+ reason when false) so an automatic
@@ -191,9 +197,9 @@ export const semanticSearchTool = defineTool({
           );
         }
         if (effArgs.target === "figures") {
-          return await figuresTarget(effArgs, deps, libraryId, numericId, sem, note);
+          return withIndexVersion(await figuresTarget(effArgs, deps, libraryId, numericId, sem, note), indexVersion);
         }
-        return await bookScope(effArgs, deps, libraryId, numericId, sem, note);
+        return withIndexVersion(await bookScope(effArgs, deps, libraryId, numericId, sem, note), indexVersion);
       }
 
       // Library scope = discovery: resolve the bundle filter + auto exclusion markers (#93).
@@ -211,9 +217,9 @@ export const semanticSearchTool = defineTool({
       note = joinNotes(note, ...honestyLines(fr.res, allow?.size));
 
       if (effArgs.target === "figures") {
-        return await figuresTarget(effArgs, deps, libraryId, undefined, sem, note, scope);
+        return withIndexVersion(await figuresTarget(effArgs, deps, libraryId, undefined, sem, note, scope), indexVersion);
       }
-      return await libraryScope(effArgs, deps, libraryId, sem, note, scope);
+      return withIndexVersion(await libraryScope(effArgs, deps, libraryId, sem, note, scope), indexVersion);
     } catch (err) {
       return mapError(err);
     }
@@ -616,6 +622,20 @@ function figuresConfidence(ranked: Array<{ cosine?: number }>, rr?: RerankOutcom
     FIGURES_SEMANTIC_FLOOR !== null && maxScore !== undefined && maxScore < FIGURES_SEMANTIC_FLOOR;
   const rerankLow = rr?.reranked === true && rr.maxRerank !== undefined && rr.maxRerank < RERANK_FLOOR;
   return { maxScore, lowConfidence: cosineLow || rerankLow };
+}
+
+/**
+ * Stamp a success with its index generation (#136): once on the envelope, never per hit (it's
+ * constant across the response), and as one compact line after the header — the text must
+ * carry it too because clients strip structuredContent.
+ */
+function withIndexVersion(res: ToolResult, indexVersion: number | undefined): ToolResult {
+  if (res.isError || indexVersion === undefined) return res;
+  const [first, ...rest] = res.content;
+  const line = `indexVersion ${indexVersion} — char offsets/pages here are valid within this index generation only.`;
+  const content: ContentBlock[] =
+    first?.type === "text" ? [{ ...first, text: `${first.text}\n${line}` }, ...rest] : [{ type: "text", text: line }, ...res.content];
+  return { ...res, content, structuredContent: { ...res.structuredContent, indexVersion } };
 }
 
 /** Prepend a degrade/advisory note to a header block (kept in the text so all clients see it). */
