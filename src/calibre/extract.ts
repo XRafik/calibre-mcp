@@ -67,9 +67,11 @@ const CACHE_DIR = path.join(tmpdir(), "calibre-mcp-cache");
 /**
  * Bump when the extracted-text layout changes — v2: inline image markers (#84) shifted
  * every char offset, so pre-marker `.txt` cache entries must never be served again
- * (they become LRU-evicted orphans). Rides in the cache filename AND the JSON envelope.
+ * (they become LRU-evicted orphans). v3: the PyMuPDF backend now separates pages with
+ * `\f` like pdftotext (#133) — cached `\n`-joined PyMuPDF text would hide page breaks.
+ * Rides in the cache filename AND the JSON envelope.
  */
-const TEXT_CACHE_VERSION = 2;
+const TEXT_CACHE_VERSION = 3;
 const MAX_CACHE_ENTRIES = 50;
 const MAX_CACHE_BYTES = 200 * 1024 * 1024;
 const CONVERT_TIMEOUT_MS = 120_000;
@@ -95,6 +97,7 @@ const FORMAT_PREFERENCE = [
   "azw3",
   "mobi",
   "docx",
+  "odt",
   "htmlz",
   "fb2",
   "rtf",
