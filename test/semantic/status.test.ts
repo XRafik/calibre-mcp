@@ -104,6 +104,19 @@ describe("computeSemanticStatus", () => {
     expect(line).toContain("restart the server");
   });
 
+  it("dep missing still reports the locked model + index counts (#108)", () => {
+    const s = computeSemanticStatus(
+      { config: memCfg, embedder: embedder(), index: memoryStore(3) },
+      LIB,
+      depDir(false),
+    );
+    expect(s.chunkCount).toBe(3);
+    expect(s.figureCount).toBe(0);
+    expect(formatSemanticStatusLine(s)).toBe(
+      "Semantic search: UNAVAILABLE — model multilingual-e5-small NOT LOADED (@huggingface/transformers not installed — install it, then restart the server); index: 1 books / 3 chunks / 0 figures, 3 vectors (keyword search still works).",
+    );
+  });
+
   it("dep present + loaded → available with index counts", () => {
     const s = computeSemanticStatus(
       { config: memCfg, embedder: embedder("loaded"), index: memoryStore(3) },
@@ -117,7 +130,7 @@ describe("computeSemanticStatus", () => {
     expect(s.vectorCount).toBe(3);
     expect(s.reason).toBeUndefined();
     expect(formatSemanticStatusLine(s)).toBe(
-      "Semantic search: ready (multilingual-e5-small, 384-dim, 1 books / 3 vectors indexed).",
+      "Semantic search: ready (multilingual-e5-small, 384-dim); index: 1 books / 3 chunks / 0 figures, 3 vectors.",
     );
   });
 

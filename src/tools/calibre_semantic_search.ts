@@ -517,7 +517,10 @@ async function figuresTarget(
   const { maxScore, lowConfidence } = figuresConfidence(ranked, rr);
   const head = withNote(
     header("figure", ranked.length, args, maxScore, lowConfidence, rr) +
-      ` Fetch pixels via calibre_get_figures { bookId, indexes: [figIndex] }.`,
+      ` Fetch pixels via calibre_get_figures { bookId, indexes: [figIndex] }.` +
+      (ranked.some((r) => r.hit.format !== "pdf")
+        ? ` ~p.N on EPUB hits = approximate page (spine-document ordinal, as in the calibre_get_figures listing).`
+        : ""),
     note,
   );
   const blocks: ContentBlock[] = [{ type: "text", text: head }];
@@ -526,7 +529,9 @@ async function figuresTarget(
     const h = r.hit;
     const ctx = deps.index.chunkAt(libraryId, h.bookId, h.charOffset);
     const snippet = ctx ? ctx.body.slice(0, CONTEXT_SNIPPET_CHARS) : undefined;
-    const pagePart = h.format === "pdf" ? ` page ${h.page},` : "";
+    // EPUB "page" is the spine-document ordinal — same number the get_figures listing shows,
+    // flagged approximate (#105).
+    const pagePart = h.format === "pdf" ? `p.${h.page},` : `~p.${h.page},`;
     const srcPart = h.source ? ` ${h.source},` : "";
     const fenced = fence(
       `FIGURE book ${h.bookId} #${h.figIndex} (${pagePart}${srcPart} @${h.charOffset}) ${scoreLabel(r)}`,

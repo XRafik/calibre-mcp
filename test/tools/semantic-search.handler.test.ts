@@ -597,6 +597,10 @@ describe("target=figures (D-018/#83/#86)", () => {
       .map((b) => b.text)
       .join("\n");
     expect(text).toContain("calibre_get_figures { bookId: 1, indexes: [3] }");
+    // page shown for both formats; EPUB's is the approximate spine ordinal (#105)
+    expect(text).toContain("FIGURE book 1 #3 (p.42, page-render,");
+    expect(text).toContain("FIGURE book 2 #0 (~p.7, raster,");
+    expect(text).toContain("~p.N on EPUB hits = approximate page");
     // figure results attach no cover-board _meta (the board renders books)
     expect((r as { _meta?: unknown })._meta).toBeUndefined();
   });
