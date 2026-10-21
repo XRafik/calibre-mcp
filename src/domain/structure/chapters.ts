@@ -6,10 +6,14 @@
 // extensions — their detector has no RU/UK support (глава/часть/раздел, оглавление/
 // содержание) and returns only counts; we add those languages and return char offsets so
 // callers can seek to a chapter start via a content cursor.
+//
+// A PDF's own outline (bookmarks) outranks all text heuristics when it is usable (#134).
+
+import { type OutlineEntry, outlineChapters } from "./pdf-outline.js";
 
 /** One detected chapter as a span over the extracted text. */
 export interface ChapterSpan {
-  /** Chapter number (explicit "Chapter N"), or a 1-based ordinal for structural headings. */
+  /** Chapter number (explicit "Chapter N"), or a 1-based ordinal for structural/outline headings. */
   n: number;
   /** The heading line, trimmed. */
   heading: string;
@@ -22,8 +26,16 @@ export interface ChapterSpan {
 export interface StructureResult {
   chapters: ChapterSpan[];
   hasToc: boolean;
-  /** Which strategy produced `chapters`: numeric headings, structural (Markdown), or none. */
-  detector: "numeric" | "structural" | "none";
+  /**
+   * Which strategy produced `chapters`: the PDF outline (bookmarks), numeric headings,
+   * structural (Markdown) headings, or none.
+   */
+  detector: "pdf-outline" | "numeric" | "structural" | "none";
+}
+
+export interface DetectOptions {
+  /** PDF outline entries (from the extractor); used when they yield a plausible chapter list. */
+  outline?: OutlineEntry[];
 }
 
 // Explicit chapter heading: "Chapter 5", "Capítulo 5: ...", "Глава 5.", "Розділ 3".
@@ -275,14 +287,23 @@ function lineOffsets(text: string): LineInfo[] {
 /**
  * Detect chapter spans and ToC presence in extracted book text.
  *
+ * A usable PDF outline (`opts.outline`, ≥ 2 plausible entries) wins over every text
+ * heuristic — detector "pdf-outline" (#134, D-020).
  * Numeric headings ("Chapter N" / "Глава N") are preferred; a chapter number can recur
  * (a ToC entry and the body heading), so for each distinct number we keep the occurrence
  * with the largest body — the real chapter, not the ToC line. Text before the first kept
  * chapter is front matter (excluded from spans, but its ToC flag is kept). When no numeric
  * headings exist, fall back to structural Markdown/AsciiDoc headings.
  */
-export function detectChapters(text: string): StructureResult {
+export function detectChapters(text: string, opts: DetectOptions = {}): StructureResult {
   const hasToc = TOC_PATTERN.test(text.slice(0, 30_000));
+
+  // 0. Publisher outline first: exact pages, real titles, and it works for books whose body
+  // never says "Chapter N". Falls through when absent or implausible (see outlineChapters).
+  if (opts.outline && opts.outline.length > 0) {
+    const fromOutline = outlineChapters(text, opts.outline);
+    if (fromOutline) return { chapters: fromOutline, hasToc, detector: "pdf-outline" };
+  }
   const lines = lineOffsets(text);
 
   // 1. Every numeric heading occurrence, in text order.
@@ -364,8 +385,8 @@ const FRONT_MATTER_MAX_CHARS = 60_000;
  * when no chapters are detected or the boundary is implausibly deep (see the guard above).
  * Powers the front-matter demotion in semantic search (issue #18).
  */
-export function frontMatterEnd(text: string): number {
-  const { chapters } = detectChapters(text);
+export function frontMatterEnd(text: string, opts: DetectOptions = {}): number {
+  const { chapters } = detectChapters(text, opts);
   if (chapters.length === 0) return 0;
   const boundary = chapters[0]!.startChar;
   const cap = Math.min(FRONT_MATTER_MAX_FRACTION * text.length, FRONT_MATTER_MAX_CHARS);
