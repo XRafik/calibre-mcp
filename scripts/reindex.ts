@@ -1,6 +1,6 @@
 // Resumable bulk (re-)index with book-level concurrency (#99) — the #87 orchestrator's
 // rebuild phase as a reusable dev script, doubling as the benchmark harness.
-// Run: node --import tsx scripts/reindex.ts --index-dir <dir> [--concurrency 3] [--ids 1,2,3]
+// Run: pnpm reindex --index-dir <dir> [--concurrency 3] [--encoder threads|shared] [--ids 1,2,3]
 
 import { statfsSync } from "node:fs";
 import path from "node:path";
@@ -11,7 +11,9 @@ import { ContentServerClient } from "../src/calibre/content-server.js";
 import { CalibreClient } from "../src/calibre/client.js";
 import { Extractor } from "../src/calibre/extract.js";
 import { FigureInventoryService } from "../src/calibre/figure-inventory.js";
-import { TransformersEmbedder, type Embedder } from "../src/semantic/embedder.js";
+import { TransformersEmbedder } from "../src/semantic/embedder.js";
+import { inThreadEncoder, type BookEncoder } from "../src/semantic/book-encoder.js";
+import { ThreadEncoder } from "../src/semantic/thread-encoder.js";
 import { SqliteIndexStore } from "../src/semantic/store.js";
 import { runBookPipeline } from "../src/semantic/book-pipeline.js";
 import { appendProgress, resumeProgress } from "../src/semantic/build-progress.js";
@@ -23,7 +25,9 @@ const { values: opt } = parseArgs({
     "index-dir": { type: "string" },
     production: { type: "boolean", default: false },
     concurrency: { type: "string", default: "3" },
-    embedders: { type: "string", default: "shared" }, // shared | per-worker
+    // shared = every worker on the main thread with one embedder; threads = one worker thread
+    // (own embedder) per worker, so chunk+tokenize+embed leave the main thread (#99).
+    encoder: { type: "string", default: "threads" },
     progress: { type: "string" },
     ids: { type: "string" },
     library: { type: "string" },
@@ -44,7 +48,7 @@ if (indexDir === path.resolve(prodDir) && !opt.production) {
   throw new Error(`${indexDir} is the production index — pass --production to really rebuild it`);
 }
 const concurrency = Math.max(1, Number(opt.concurrency) || 1);
-const perWorker = opt.embedders === "per-worker";
+const threaded = opt.encoder === "threads";
 const progressFile = opt.progress ?? path.join(indexDir, "progress.jsonl");
 const minFreeGb = Number(opt["min-free-gb"]);
 
@@ -61,13 +65,12 @@ const deps = {
   log,
 } as unknown as ToolDeps;
 
-// Shared = one ONNX session whose InferenceQueue serializes every forward; per-worker =
-// one session each, so forwards can overlap (more memory — the #99 trade-off being measured).
-const embedders: Embedder[] = perWorker
-  ? Array.from({ length: concurrency }, () => new TransformersEmbedder(config))
-  : [deps.embedder];
+// shared: one ONNX session (its InferenceQueue serializes forwards) and all chunking on the
+// main thread. threads: one model copy per thread — ~+300 MB each, the price of real parallelism.
+const threads = threaded ? Array.from({ length: concurrency }, () => new ThreadEncoder(config)) : [];
+const encoders: BookEncoder[] = threaded ? threads : [inThreadEncoder(deps.embedder)];
 const tWarm = Date.now();
-await Promise.all(embedders.map((e) => e.warmup()));
+await Promise.all(threaded ? threads.map((t) => t.warmup()) : [deps.embedder.warmup()]);
 const warmupMs = Date.now() - tWarm;
 
 const libraryId = await deps.content.resolveLibraryId(opt.library);
@@ -80,7 +83,7 @@ if (opt.ids) {
 }
 const done = resumeProgress(progressFile);
 const todo = ids.filter((id) => !done.has(id));
-say(`${ids.length} selected, ${done.size} already done, ${todo.length} to index — concurrency ${concurrency}, ${perWorker ? "per-worker" : "shared"} embedder, warmup ${warmupMs} ms`);
+say(`${ids.length} selected, ${done.size} already done, ${todo.length} to index — concurrency ${concurrency}, ${threaded ? "thread-per-worker" : "shared main-thread"} encoder, warmup ${warmupMs} ms`);
 
 const freeGb = (): number => {
   const s = statfsSync(indexDir);
@@ -104,7 +107,7 @@ await runBookPipeline<PrepareResult>(todo, concurrency, {
       force: !opt["skip-fresh"],
       keywordOnly: false,
       tokenBudgeted: true,
-      embedder: embedders[perWorker ? worker : 0],
+      encoder: encoders[threaded ? worker : 0],
     });
   },
   commit: (_bookId, prepared) => {
@@ -143,7 +146,7 @@ const wallMs = Date.now() - t0;
 const peakRssMb = Math.round(process.resourceUsage().maxRSS / 1024);
 const summary = {
   concurrency,
-  embedders: perWorker ? "per-worker" : "shared",
+  encoder: threaded ? "threads" : "shared",
   books: todo.length,
   ok: okBooks,
   failed,
@@ -155,4 +158,5 @@ const summary = {
 };
 say(`done: ${JSON.stringify(summary)}`);
 process.stdout.write(JSON.stringify(summary) + "\n");
+await Promise.all(threads.map((t) => t.close()));
 process.exit(abort ? 2 : 0);

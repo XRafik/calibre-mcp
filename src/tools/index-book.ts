@@ -3,17 +3,11 @@
 // books at once; commitBook is the single SQLite write and must only run serialized.
 
 import { chooseExtractFormat, noTextReason } from "../calibre/extract.js";
-import { frontMatterEnd } from "../domain/structure/chapters.js";
 import type { FigureMarker } from "../domain/figures/markers.js";
 import type { EmbedChunk } from "../semantic/chunk.js";
-import { chunkForEmbeddingAsync } from "../semantic/chunk.js";
-import type { Embedder } from "../semantic/embedder.js";
-import { MAX_TOKENS, PASSAGE_PREFIX } from "../semantic/model.js";
+import { inThreadEncoder, type BookEncoder } from "../semantic/book-encoder.js";
 import type { BookMeta, IndexedChunk, IndexedFigure } from "../semantic/store.js";
 import type { ToolDeps } from "./types.js";
-
-/** Floor on the token budget — a pathologically long title/authors prefix can't starve chunks. */
-const MIN_TOKEN_BUDGET = 64;
 
 /** Per-book diagnostics surfaced to structuredContent — the re-index triage record (#87). */
 export interface BookDetail {
@@ -50,8 +44,8 @@ export interface PrepareOptions {
   keywordOnly: boolean;
   /** True only after a successful embedder warmup — token budgeting needs a loaded tokenizer. */
   tokenBudgeted: boolean;
-  /** Embedder for this worker; defaults to deps.embedder (the shared session). */
-  embedder?: Embedder;
+  /** Chunk+embed engine for this worker; defaults to deps.embedder on the calling thread. */
+  encoder?: BookEncoder;
 }
 
 /**
@@ -61,7 +55,6 @@ export interface PrepareOptions {
  */
 export async function prepareBook(deps: ToolDeps, bookId: number, opts: PrepareOptions): Promise<PrepareResult> {
   const { libraryId, library, keywordOnly, tokenBudgeted } = opts;
-  const embedder = opts.embedder ?? deps.embedder;
   let mark = Date.now();
   const lap = (): number => {
     const now = Date.now();
@@ -97,61 +90,43 @@ export async function prepareBook(deps: ToolDeps, bookId: number, opts: PrepareO
   // char offsets still line up with calibre_get_content.
   const ctx = `[${book.title} › ${book.authors.join(", ")}]\n`;
 
-  let chunks: EmbedChunk[];
-  if (!keywordOnly && tokenBudgeted) {
-    // Budget in REAL model tokens: the e5 window minus what the "passage: " + context
-    // prefixes consume, so RU chunks stop being over-conservative and EN chunks stop
-    // silently wasting window. countTokens is safe here — warmup succeeded (tokenBudgeted).
-    const budget = Math.max(MIN_TOKEN_BUDGET, MAX_TOKENS - embedder.countTokens(PASSAGE_PREFIX + ctx));
-    // Async: yields between chunks so a big book can't freeze the other workers' I/O (#99).
-    chunks = await chunkForEmbeddingAsync(extracted.text, { budget, lengthFn: (s) => embedder.countTokens(s) });
-  } else {
-    // No loaded model (keyword-only or a failed warmup) — no token window to respect;
-    // the conservative char-based default applies.
-    chunks = await chunkForEmbeddingAsync(extracted.text);
-  }
-  if (chunks.length === 0) throw new Error("produced no chunks");
+  // Figure captions (D-018 Phase B / #86): every placed marker becomes a figures row —
+  // caption + char_offset come from the marker (same text coordinates as the chunks),
+  // source/dims from the figure inventory (already cached by marker injection). Captions get
+  // their own embeddings so target:"figures" search ranks them directly.
+  const figureRowsP: Promise<IndexedFigure[]> =
+    extracted.markers.length > 0
+      ? figureRows(deps, { bookId, format: fmt, downloadUrl, cacheKey }, extracted.markers)
+      : Promise.resolve([]);
+  const encoder = opts.encoder ?? inThreadEncoder(deps.embedder);
+  const encoded = await encoder.encode({
+    text: extracted.text,
+    ctx,
+    captions: extracted.markers.map((m) => m.caption),
+    keywordOnly,
+    tokenBudgeted,
+  });
+  if (encoded.chunks.length === 0) throw new Error("produced no chunks");
 
   // Chunks that are MOSTLY before the first detected chapter are front matter (TOC/praise/
   // foreword) — search demotes them below body matches (issue #18). Majority overlap, not
   // full containment: chunks run ~2k chars, so the whole front matter usually lands inside
   // one boundary-straddling chunk that a containment rule would never flag.
-  const fmEnd = frontMatterEnd(extracted.text);
+  const { fmEnd, vectors, captionVectors } = encoded;
   const isFrontMatter = (c: EmbedChunk): boolean =>
     fmEnd > 0 && Math.min(c.charEnd, fmEnd) - c.charStart >= 0.5 * (c.charEnd - c.charStart);
 
-  const chunkMs = lap();
-
-  let indexed: IndexedChunk[];
-  if (keywordOnly) {
-    // No embeddings — chunks are stored raw + pre-stemmed (in the store) for FTS keyword search.
-    indexed = chunks.map((c) => ({
-      charStart: c.charStart,
-      charEnd: c.charEnd,
-      body: c.body,
-      frontMatter: isFrontMatter(c),
-    }));
-  } else {
-    const vectors = await embedder.embedPassages(chunks.map((c) => ctx + c.body));
-    indexed = chunks.map((c, i) => ({
-      charStart: c.charStart,
-      charEnd: c.charEnd,
-      body: c.body,
-      frontMatter: isFrontMatter(c),
-      vector: vectors[i]!,
-    }));
-  }
-  // Figure captions (D-018 Phase B / #86): every placed marker becomes a figures row —
-  // caption + char_offset come from the marker (same text coordinates as the chunks above),
-  // source/dims from the figure inventory (already cached by marker injection). Captions get
-  // their own embeddings so target:"figures" search ranks them directly.
-  let figures: IndexedFigure[] = [];
-  if (extracted.markers.length > 0) {
-    figures = await figureRows(deps, { bookId, format: fmt, downloadUrl, cacheKey }, extracted.markers);
-    if (!keywordOnly && figures.length > 0) {
-      const vectors = await embedder.embedPassages(figures.map((f) => ctx + f.caption));
-      figures = figures.map((f, i) => ({ ...f, vector: vectors[i]! }));
-    }
+  // keywordOnly: no vectors — chunks are stored raw + pre-stemmed (in the store) for FTS search.
+  const indexed: IndexedChunk[] = encoded.chunks.map((c, i) => ({
+    charStart: c.charStart,
+    charEnd: c.charEnd,
+    body: c.body,
+    frontMatter: isFrontMatter(c),
+    ...(vectors ? { vector: vectors[i]! } : {}),
+  }));
+  let figures = await figureRowsP;
+  if (captionVectors && figures.length > 0) {
+    figures = figures.map((f, i) => ({ ...f, vector: captionVectors[i]! }));
   }
 
   return {
@@ -161,7 +136,7 @@ export async function prepareBook(deps: ToolDeps, bookId: number, opts: PrepareO
     figures,
     keywordOnly,
     // Embed includes the figure inventory lookup (a cache hit after marker injection).
-    phaseMs: { fetch: fetchMs, extract: extractMs, chunk: chunkMs, embed: lap() },
+    phaseMs: { fetch: fetchMs, extract: extractMs, ...encoded.phaseMs },
     detail: {
       bookId,
       format: fmt,
