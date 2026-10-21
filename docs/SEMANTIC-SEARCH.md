@@ -120,7 +120,9 @@ Russian book and vice versa. The keyword half stems both languages, so
 - **Front-matter demotion depends on chapter detection.** Books whose front matter is
   itself heading-structured — a title page, copyright, and praise pages that all look like
   headings, common in EPUBs — report no front matter at all and get no demotion. It applies
-  to roughly half a mixed library.
+  to roughly half a mixed library. PDFs with publisher bookmarks use the outline's first
+  non-front-matter entry as the boundary (the same chapter map `calibre_get_content`
+  `structure: true` shows); books indexed before that change pick it up on re-index.
 - **Extraction improves between releases, but only for books indexed afterwards.** Text
   extraction, figure linkage, and front-matter detection all run at index time, so upgrading
   the server does not retroactively improve an existing index. Rebuild with `force: true`

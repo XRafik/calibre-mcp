@@ -17,9 +17,11 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import type { Config } from "../config.js";
 import { type FigureMarker, injectFigureMarkers } from "../domain/figures/markers.js";
+import type { OutlineEntry } from "../domain/structure/pdf-outline.js";
 import { log } from "../logging.js";
 import type { GetInventoryArgs, InventoryResult } from "./figure-inventory.js";
 import { downloadToFile } from "./http.js";
+import { pdftohtmlBinary, readPdfOutline } from "./pdf-outline.js";
 import { spawnCollect, SpawnMaxBufferError, SpawnTimeoutError } from "./spawn.js";
 
 const execFileAsync = promisify(execFile);
@@ -32,6 +34,8 @@ export interface BackendReport {
   /** EPUB/other extractor (Calibre's ebook-convert), or null if missing. */
   epub: "ebook-convert" | null;
   pdftotextPath?: string;
+  /** poppler's pdftohtml — reads the PDF outline (bookmarks) for chapter maps (#134). */
+  pdftohtmlPath?: string;
   python3Path?: string;
   ebookConvertPath?: string;
   detectedAt: string;
@@ -46,6 +50,8 @@ export interface ExtractedText {
   markers: FigureMarker[];
   /** Inventory figures whose caption line was not found in the text (silent linkage gap signal). */
   unplaced: number;
+  /** PDF outline (bookmarks) — a chapter-map source (#134); [] for non-PDFs or no outline. */
+  outline: OutlineEntry[];
 }
 
 /** Structural seam for the figure-inventory service — keeps the extractor testable. */
@@ -69,9 +75,11 @@ const CACHE_DIR = path.join(tmpdir(), "calibre-mcp-cache");
  * every char offset, so pre-marker `.txt` cache entries must never be served again
  * (they become LRU-evicted orphans). v3: the PyMuPDF backend now separates pages with
  * `\f` like pdftotext (#133) — cached `\n`-joined PyMuPDF text would hide page breaks.
+ * v4: envelope carries the PDF outline (#134) — v3 entries would never gain a chapter map
+ * from bookmarks until LRU-evicted.
  * Rides in the cache filename AND the JSON envelope.
  */
-const TEXT_CACHE_VERSION = 3;
+const TEXT_CACHE_VERSION = 4;
 const MAX_CACHE_ENTRIES = 50;
 const MAX_CACHE_BYTES = 200 * 1024 * 1024;
 const CONVERT_TIMEOUT_MS = 120_000;
@@ -182,6 +190,13 @@ export class Extractor {
     const pdftotextPath = resolveBinary(PDFTOTEXT_CANDIDATES, "pdftotext");
     const hasPdftotext = PDFTOTEXT_CANDIDATES.some(existsSync) || (await binaryExists(pdftotextPath));
 
+    // pdftohtml ships beside pdftotext in every poppler build; probe the sibling for a PATH install.
+    const pdftohtmlPath =
+      pdftohtmlBinary() ??
+      (hasPdftotext && path.isAbsolute(pdftotextPath) && existsSync(path.join(path.dirname(pdftotextPath), "pdftohtml"))
+        ? path.join(path.dirname(pdftotextPath), "pdftohtml")
+        : undefined);
+
     const python3Path = resolveBinary(PYTHON_CANDIDATES, "python3");
     const hasFitz = await python3HasFitz(python3Path);
 
@@ -194,6 +209,7 @@ export class Extractor {
       pdf,
       epub: hasEbookConvert ? "ebook-convert" : null,
       pdftotextPath: hasPdftotext ? pdftotextPath : undefined,
+      pdftohtmlPath,
       python3Path: hasFitz ? python3Path : undefined,
       ebookConvertPath: hasEbookConvert ? ebookConvertPath : undefined,
       detectedAt: new Date().toISOString(),
@@ -217,7 +233,15 @@ export class Extractor {
         const now = new Date();
         await utimes(cacheFile, now, now).catch(() => {}); // LRU touch
         // Pre-diagnostics cache entries lack the count — 0 keeps the field honest-optimistic.
-        return { text: hit.text, backend: "cache", chars: hit.text.length, cached: true, markers: hit.markers, unplaced: hit.unplaced ?? 0 };
+        return {
+          text: hit.text,
+          backend: "cache",
+          chars: hit.text.length,
+          cached: true,
+          markers: hit.markers,
+          unplaced: hit.unplaced ?? 0,
+          outline: hit.outline ?? [],
+        };
       }
       // unreadable/corrupt envelope: fall through and re-extract
     }
@@ -233,10 +257,12 @@ export class Extractor {
       });
       const converted = await this.#convert(fmt, tmpSrc, tmpOut, report, args.timeoutMs);
       const { text, markers, unplaced } = await this.#injectMarkers(converted.text, fmt, args);
-      const envelope: TextCacheEnvelope = { v: TEXT_CACHE_VERSION, backend: converted.backend, text, markers, unplaced };
+      // Read while the downloaded PDF still exists; best-effort, [] on any failure.
+      const outline = fmt === "pdf" && report.pdftohtmlPath ? await readPdfOutline(report.pdftohtmlPath, tmpSrc) : [];
+      const envelope: TextCacheEnvelope = { v: TEXT_CACHE_VERSION, backend: converted.backend, text, markers, unplaced, outline };
       await writeFile(cacheFile, JSON.stringify(envelope), "utf8");
       await evictCache().catch(() => {});
-      return { text, backend: converted.backend, chars: text.length, cached: false, markers, unplaced };
+      return { text, backend: converted.backend, chars: text.length, cached: false, markers, unplaced, outline };
     } finally {
       await unlink(tmpSrc).catch(() => {});
       await unlink(tmpOut).catch(() => {});
@@ -378,6 +404,8 @@ interface TextCacheEnvelope {
   markers: FigureMarker[];
   /** Optional (added post-#87 pre-flight): absent in older v2 entries — read as 0. */
   unplaced?: number;
+  /** PDF outline entries (v4, #134); absent for non-PDF entries — read as []. */
+  outline?: OutlineEntry[];
 }
 
 /** Parse + validate a text-cache envelope; null on corruption or version mismatch. */
@@ -386,7 +414,14 @@ export function parseTextCacheEnvelope(raw: string): TextCacheEnvelope | null {
     const parsed = JSON.parse(raw) as Partial<TextCacheEnvelope>;
     if (parsed.v !== TEXT_CACHE_VERSION) return null;
     if (typeof parsed.text !== "string" || !Array.isArray(parsed.markers)) return null;
-    return { v: parsed.v, backend: typeof parsed.backend === "string" ? parsed.backend : "cache", text: parsed.text, markers: parsed.markers };
+    return {
+      v: parsed.v,
+      backend: typeof parsed.backend === "string" ? parsed.backend : "cache",
+      text: parsed.text,
+      markers: parsed.markers,
+      ...(typeof parsed.unplaced === "number" ? { unplaced: parsed.unplaced } : {}),
+      ...(Array.isArray(parsed.outline) ? { outline: parsed.outline } : {}),
+    };
   } catch {
     return null;
   }

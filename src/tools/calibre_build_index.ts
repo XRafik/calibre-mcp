@@ -359,7 +359,7 @@ async function indexBook(
   // foreword) — search demotes them below body matches (issue #18). Majority overlap, not
   // full containment: chunks run ~2k chars, so the whole front matter usually lands inside
   // one boundary-straddling chunk that a containment rule would never flag.
-  const fmEnd = frontMatterEnd(extracted.text);
+  const fmEnd = frontMatterEnd(extracted.text, { outline: extracted.outline });
   const isFrontMatter = (c: EmbedChunk): boolean =>
     fmEnd > 0 && Math.min(c.charEnd, fmEnd) - c.charStart >= 0.5 * (c.charEnd - c.charStart);
 

@@ -99,6 +99,15 @@ character ranges, approximate token counts, and a per-chapter `cursor` you can f
 start reading at that chapter. Works on English and Russian/Ukrainian books. Scanned/image PDFs
 yield no text (Calibre has no OCR).
 
+The map reports which `detector` built it, in this order of precedence:
+
+| `detector` | Source |
+|---|---|
+| `pdf-outline` | The PDF's own bookmarks (needs poppler's `pdftohtml`). Used when the outline yields at least two plausible chapters; leading front matter (cover, copyright, contents, preface…) is left out, `Part` entries are opened up into their chapters, and each chapter starts at its heading line on the bookmarked page. Flat "bookmark every section/page" outlines are rejected. `n` is a running number, not the printed chapter number. |
+| `numeric` | Headings in the text: `Chapter 5`, `Глава 5`, `Розділ 3`, Roman numerals, `第5章` |
+| `structural` | Markdown/AsciiDoc headings (`#`, `##`, setext) — mostly EPUB/Markdown books |
+| `none` | Nothing found — walk the book with plain cursors |
+
 | Parameter | Type | Default | Meaning |
 |---|---|---|---|
 | `id` (or `bookId`) | number \| uuid | *(required)* | The book to read |
