@@ -103,14 +103,12 @@ function deps(opts: FakeOpts = {}): ToolDeps {
   const content = {
     getBook: async (): Promise<Book> => ({ ...baseBook, ...opts.book }),
     resolveLibraryId: async () => "Programming_Books",
-    search: async () => ({
-      bookIds: ids,
-      total: ids.length,
-      num: ids.length,
-      offset: 0,
-      sort: "",
-      libraryId: "Programming_Books",
-    }),
+    // Honors num/offset like /ajax/search, so paging loops are exercised for real.
+    search: async (p: { num?: number; offset?: number }) => {
+      const offset = p.offset ?? 0;
+      const page = ids.slice(offset, offset + (p.num ?? 100));
+      return { bookIds: page, total: ids.length, num: page.length, offset, sort: "", libraryId: "Programming_Books" };
+    },
   };
   const extractor = {
     getText:
@@ -188,6 +186,29 @@ describe("calibre_build_index handler", () => {
     expect(r.isError).toBeFalsy();
     expect(r.structuredContent).toMatchObject({ booksIndexed: 0 });
     expect((r.structuredContent?.failures as string[])[0]).toContain("book 1");
+  });
+
+  it("a query selects EVERY match across pages, not just the first 100 (#138)", async () => {
+    const libraryIds = Array.from({ length: 1150 }, (_, i) => i + 1);
+    const store = new SqliteIndexStore(loadConfig({ CALIBRE_MCP_INDEX_DIR: ":memory:" }));
+    const r = await buildIndexTool.handler(
+      args({ query: "id:>=0", keywordOnly: true }),
+      deps({ store, libraryIds }),
+    );
+    expect(r.isError).toBeFalsy();
+    expect(r.structuredContent).toMatchObject({ booksRequested: 1150, booksIndexed: 1150 });
+    expect(store.isBookIndexed("Programming_Books", 1150)).toBe(true);
+    // Large selections tell the model a re-run resumes an interrupted build.
+    expect((r.content[0] as { text: string }).text).toContain("re-run the same call to resume");
+  });
+
+  it("a small query selection carries no large-build note", async () => {
+    const r = await buildIndexTool.handler(
+      args({ query: "tag:rust", keywordOnly: true }),
+      deps({ libraryIds: [1, 2, 3] }),
+    );
+    expect(r.structuredContent).toMatchObject({ booksRequested: 3, booksIndexed: 3 });
+    expect((r.content[0] as { text: string }).text).not.toContain("resume");
   });
 
   it("notes that enableFts is not yet implemented", async () => {
