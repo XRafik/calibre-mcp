@@ -6,7 +6,7 @@ import { chooseExtractFormat, noTextReason } from "../calibre/extract.js";
 import { frontMatterEnd } from "../domain/structure/chapters.js";
 import type { FigureMarker } from "../domain/figures/markers.js";
 import type { EmbedChunk } from "../semantic/chunk.js";
-import { chunkForEmbedding } from "../semantic/chunk.js";
+import { chunkForEmbeddingAsync } from "../semantic/chunk.js";
 import type { Embedder } from "../semantic/embedder.js";
 import { MAX_TOKENS, PASSAGE_PREFIX } from "../semantic/model.js";
 import type { BookMeta, IndexedChunk, IndexedFigure } from "../semantic/store.js";
@@ -103,11 +103,12 @@ export async function prepareBook(deps: ToolDeps, bookId: number, opts: PrepareO
     // prefixes consume, so RU chunks stop being over-conservative and EN chunks stop
     // silently wasting window. countTokens is safe here — warmup succeeded (tokenBudgeted).
     const budget = Math.max(MIN_TOKEN_BUDGET, MAX_TOKENS - embedder.countTokens(PASSAGE_PREFIX + ctx));
-    chunks = chunkForEmbedding(extracted.text, { budget, lengthFn: (s) => embedder.countTokens(s) });
+    // Async: yields between chunks so a big book can't freeze the other workers' I/O (#99).
+    chunks = await chunkForEmbeddingAsync(extracted.text, { budget, lengthFn: (s) => embedder.countTokens(s) });
   } else {
     // No loaded model (keyword-only or a failed warmup) — no token window to respect;
     // the conservative char-based default applies.
-    chunks = chunkForEmbedding(extracted.text);
+    chunks = await chunkForEmbeddingAsync(extracted.text);
   }
   if (chunks.length === 0) throw new Error("produced no chunks");
 

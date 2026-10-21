@@ -25,10 +25,14 @@ const LARGE_SELECTION = 100;
 /** Progress line to stderr every N books, so a long build is observable in the server log. */
 const PROGRESS_EVERY = 25;
 
-/** Hard cap on concurrent book workers — beyond it the shared embedder is the bottleneck (#99). */
+/** Hard cap on concurrent book workers — past ~2 the shared embedder is the bottleneck (#99). */
 export const MAX_BUILD_CONCURRENCY = 4;
-/** Default worker count — picked from the #99 sample benchmark (see the PR). */
-export const DEFAULT_BUILD_CONCURRENCY = 1;
+/**
+ * Default worker count. #99 sample bench: 2 workers cut ~30% off wall time vs 1, and 3-4 did
+ * no better on a shared embedder (main-thread chunking + one ONNX session are the ceiling),
+ * while every extra worker lets a concurrent search's query embed wait one more batch.
+ */
+export const DEFAULT_BUILD_CONCURRENCY = 2;
 
 export const buildIndexTool = defineTool({
   name: "calibre_build_index",
