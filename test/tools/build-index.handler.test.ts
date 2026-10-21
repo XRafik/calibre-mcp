@@ -1,10 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { z } from "zod";
-import {
-  buildIndexTool,
-  DEFAULT_BUILD_CONCURRENCY,
-  MAX_BUILD_CONCURRENCY,
-} from "../../src/tools/calibre_build_index.js";
+import { buildIndexTool } from "../../src/tools/calibre_build_index.js";
 import { loadConfig } from "../../src/config.js";
 import { log } from "../../src/logging.js";
 import type { Book } from "../../src/domain/book.js";
@@ -549,51 +544,3 @@ describe("figure caption indexing (D-018 Phase B / #86)", () => {
   });
 });
 
-describe("calibre_build_index concurrency (#99)", () => {
-  const schema = z.object(buildIndexTool.inputSchema);
-  const parseConcurrency = (v: unknown) => schema.parse({ bookId: 1, concurrency: v }).concurrency;
-
-  it("coerces and clamps concurrency instead of refusing it", () => {
-    expect(schema.parse({ bookId: 1 }).concurrency).toBe(DEFAULT_BUILD_CONCURRENCY);
-    expect(parseConcurrency("3")).toBe(3);
-    expect(parseConcurrency(99)).toBe(MAX_BUILD_CONCURRENCY);
-    expect(parseConcurrency(0)).toBe(1);
-    expect(parseConcurrency(2.7)).toBe(2);
-    expect(parseConcurrency("lots")).toBe(DEFAULT_BUILD_CONCURRENCY);
-  });
-
-  it("a concurrent multi-book build indexes every book and reports in selection order", async () => {
-    const store = new SqliteIndexStore(loadConfig({ CALIBRE_MCP_INDEX_DIR: ":memory:" }));
-    let inFlight = 0;
-    let maxInFlight = 0;
-    const getText = async (): Promise<ExtractedText> => {
-      inFlight++;
-      maxInFlight = Math.max(maxInFlight, inFlight);
-      await new Promise((r) => setTimeout(r, 5));
-      inFlight--;
-      return { text: "Ownership and borrowing. ".repeat(200), backend: "pdftotext", chars: 5000, cached: false, markers: [] };
-    };
-    const ids = [5, 3, 8, 1, 7, 2];
-    const r = await buildIndexTool.handler(args({ ids, concurrency: 3 }), deps({ store, getText }));
-    expect(r.isError).toBeFalsy();
-    expect(r.structuredContent).toMatchObject({ booksRequested: 6, booksIndexed: 6, failures: [] });
-    expect(maxInFlight).toBe(3);
-    const details = r.structuredContent?.bookDetails as Array<{ bookId: number }>;
-    expect(details.map((d) => d.bookId)).toEqual(ids);
-    for (const id of ids) expect(store.isBookIndexed("Programming_Books", id)).toBe(true);
-  });
-
-  it("one failing book never kills a concurrent build", async () => {
-    const store = new SqliteIndexStore(loadConfig({ CALIBRE_MCP_INDEX_DIR: ":memory:" }));
-    let call = 0;
-    const getText = async (): Promise<ExtractedText> => {
-      if (++call === 2) throw new Error("EXTRACT_TIMEOUT");
-      return { text: "Ownership and borrowing. ".repeat(200), backend: "pdftotext", chars: 5000, cached: false, markers: [] };
-    };
-    const r = await buildIndexTool.handler(args({ ids: [1, 2, 3, 4], concurrency: 2 }), deps({ store, getText }));
-    expect(r.isError).toBeFalsy();
-    expect(r.structuredContent).toMatchObject({ booksRequested: 4, booksIndexed: 3 });
-    expect(r.structuredContent?.failures).toEqual([expect.stringContaining("extraction timed out")]);
-    expect((r.content[0] as { text: string }).text).toContain("1 failed");
-  });
-});

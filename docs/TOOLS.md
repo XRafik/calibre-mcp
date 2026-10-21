@@ -254,7 +254,6 @@ it's safe to run without enabling library writes.
 | `force` | boolean | `false` | Re-index books even if unchanged |
 | `keywordOnly` | boolean | `false` | Build a keyword-only index (no embedding model needed) |
 | `prune` | boolean | `false` | Also delete index entries for books no longer in the library |
-| `concurrency` | number | `2` | Books extracted/embedded at once on multi-book builds (clamped to 1–4; writes stay serialized) |
 
 *(At least one of `bookId`, `ids`, or `query` is required.)*
 

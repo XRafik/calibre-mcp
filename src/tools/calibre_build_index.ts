@@ -25,14 +25,14 @@ const LARGE_SELECTION = 100;
 /** Progress line to stderr every N books, so a long build is observable in the server log. */
 const PROGRESS_EVERY = 25;
 
-/** Hard cap on concurrent book workers — past ~2 the shared embedder is the bottleneck (#99). */
-export const MAX_BUILD_CONCURRENCY = 4;
 /**
- * Default worker count. #99 sample bench: 2 workers cut ~30% off wall time vs 1, and 3-4 did
- * no better on a shared embedder (main-thread chunking + one ONNX session are the ceiling),
- * while every extra worker lets a concurrent search's query embed wait one more batch.
+ * Books in flight per build call. 1 on purpose (#99 bench): chunking + tokenizing are
+ * main-thread JS, so in-thread book concurrency bought 0-6%, while each extra in-flight book
+ * makes a concurrent search's query embed wait behind one more passage batch. The real win is
+ * worker threads (scripts/reindex.ts --encoder threads) — not wired into the server yet,
+ * since each thread loads its own model copy (~0.9 GB) inside the long-lived server process.
  */
-export const DEFAULT_BUILD_CONCURRENCY = 2;
+const BUILD_CONCURRENCY = 1;
 
 export const buildIndexTool = defineTool({
   name: "calibre_build_index",
@@ -48,13 +48,6 @@ export const buildIndexTool = defineTool({
     enableFts: CoercedBool().default(false),
     keywordOnly: CoercedBool().default(false),
     prune: CoercedBool().default(false),
-    // Books extracted/embedded at once on multi-book calls (#99). Coerced ("3" → 3) and
-    // clamped, never refused: an out-of-range value from a sloppy client still builds.
-    concurrency: z.coerce
-      .number()
-      .catch(DEFAULT_BUILD_CONCURRENCY)
-      .transform((n) => Math.min(MAX_BUILD_CONCURRENCY, Math.max(1, Math.floor(n) || 1)))
-      .default(DEFAULT_BUILD_CONCURRENCY),
   },
   outputSchema: {
     booksRequested: z.number().optional(),
@@ -199,9 +192,9 @@ export const buildIndexTool = defineTool({
     let totalUnplaced = 0;
     const bookDetails: BookDetail[] = [];
     let settled = 0;
-    // Book-level pipeline (#99): up to `concurrency` books extract/embed at once, one
-    // serialized writer commits them — the SQLite single-writer invariant holds at any N.
-    const outcomes = await runBookPipeline<PrepareResult>([...targets], args.concurrency, {
+    // Book-level pipeline (#99): write-free prepare per book, one serialized writer commits —
+    // the same path the threaded bulk re-index uses, so both keep the single-writer invariant.
+    const outcomes = await runBookPipeline<PrepareResult>([...targets], BUILD_CONCURRENCY, {
       prepare: (bookId) =>
         prepareBook(deps, bookId, { libraryId, library: args.library, force: args.force, keywordOnly, tokenBudgeted }),
       commit: (_bookId, prepared) => {
