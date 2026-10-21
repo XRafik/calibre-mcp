@@ -229,8 +229,10 @@ candidates at query time, so creating or changing bundles needs no re-index.
 
 Build (or refresh) the local semantic index for a chosen set of books. A selector is
 **required** — pick books by `bookId`, a list of `ids`, or a Calibre `query` (there's no
-index-everything default). The first embedding build downloads the model (~118 MB, one-time),
-then runs offline. Set `keywordOnly: true` to build a model-free keyword index (zero ML
+index-everything default). A `query` selects **every** matching book (paged, no cap) — on a
+big library a broad query is a long job that can outlive the client's request timeout; just
+re-run the same call to resume, since books already up to date are skipped. The first
+embedding build downloads the model (~118 MB, one-time), then runs offline. Set `keywordOnly: true` to build a model-free keyword index (zero ML
 dependencies); this also happens automatically if the embedding model isn't installed. Re-run
 after adding books; use `force: true` to re-index books that haven't changed. Each book's
 figure captions (see `calibre_get_figures`) are indexed alongside its text, powering

@@ -337,6 +337,20 @@ describe("calibre_semantic_search rerank stage", () => {
     expect((r.content[0] as { text: string }).text).toContain("Reranker unavailable");
   });
 
+  it("a busy reranker (#156) degrades to the fused order with a run-sequentially note", async () => {
+    const busy: Reranker = {
+      async rerank() {
+        throw new Error("RERANKER_BUSY");
+      },
+      async warmup() {},
+    };
+    const r = await semanticSearchTool.handler(args(), deps(preloaded(), queryEmbedder, busy));
+    expect(r.isError).toBeFalsy();
+    expect(r.structuredContent).toMatchObject({ reranked: false });
+    expect((r.content[0] as { text: string }).text).toContain("Reranker busy");
+    expect((r.content[0] as { text: string }).text).toContain("one at a time");
+  });
+
   it("keyword mode never calls the reranker and stays untouched", async () => {
     const reranker = scoreByBody({ ownership: 0.9 });
     const r = await semanticSearchTool.handler(

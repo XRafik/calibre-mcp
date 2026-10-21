@@ -80,7 +80,10 @@ Two refinements worth knowing about:
   ~576 MB, downloaded on first index build), the top ~30 fused candidates are
   re-scored by a cross-encoder that reads the query and passage *together* — a
   noticeably sharper final ordering. Without the model, results keep the fused
-  order. Disable with `CALIBRE_MCP_RERANK=off`.
+  order. Disable with `CALIBRE_MCP_RERANK=off`. Reranking takes seconds of CPU, so
+  rerank calls run one at a time in arrival order; when more than two are already
+  waiting, a new search skips the rerank (fused order + a "reranker busy" note) rather
+  than waiting past the client's request timeout.
 - **Front-matter demotion.** In book scope, chunks from front matter (table of
   contents, praise quotes, forewords) are keyword-dense but rarely what you want, so
   they are demoted below body-text matches and labeled `[front matter]` — never

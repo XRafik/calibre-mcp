@@ -20,13 +20,14 @@ import type { EmbedChunk } from "../semantic/chunk.js";
 import { chunkForEmbedding } from "../semantic/chunk.js";
 import { MAX_TOKENS, PASSAGE_PREFIX } from "../semantic/model.js";
 
-/** Cap on books selected by a query, so a broad query can't kick off a huge build. */
-const MAX_QUERY_BOOKS = 100;
-
-/** Page size when listing the whole library for a prune (ids only — the response is tiny). */
-const PRUNE_PAGE = 1000;
-/** Runaway guard on the prune paging loop (1000 × 1000 ids ≫ any real library). */
-const PRUNE_MAX_PAGES = 1000;
+/** Page size when listing query matches / the whole library (ids only — the response is tiny). */
+const ID_PAGE = 1000;
+/** Runaway guard on the id paging loop (1000 × 1000 ids ≫ any real library). */
+const ID_MAX_PAGES = 1000;
+/** Above this many query-selected books, the result carries a long-build/resume note (#138). */
+const LARGE_SELECTION = 100;
+/** Progress line to stderr every N books, so a long build is observable in the server log. */
+const PROGRESS_EVERY = 25;
 
 /** Floor on the token budget — a pathologically long title/authors prefix can't starve chunks. */
 const MIN_TOKEN_BUDGET = 64;
@@ -35,7 +36,7 @@ export const buildIndexTool = defineTool({
   name: "calibre_build_index",
   title: "Build semantic index",
   description:
-    "Build the semantic index for specific books (required: bookId, ids, or query — full-library indexing is deferred). Extracts, chunks, and embeds each book. Set keywordOnly=true (or when the embedding model is absent, it happens automatically) to build a keyword-only index that powers mode:\"keyword\" search with zero ML dependencies. Re-run after adding books; use force to re-index unchanged ones. Set prune=true to also drop index entries for books that no longer exist in the library (removals/merges leave searchable orphans behind).",
+    "Build the semantic index for specific books (required: bookId, ids, or query — full-library indexing is deferred). A query selects ALL matching books (no 100-book cap); large selections run long and may outlive the client timeout — re-run the same call to resume, since up-to-date books are skipped. Extracts, chunks, and embeds each book. Set keywordOnly=true (or when the embedding model is absent, it happens automatically) to build a keyword-only index that powers mode:\"keyword\" search with zero ML dependencies. Re-run after adding books; use force to re-index unchanged ones. Set prune=true to also drop index entries for books that no longer exist in the library (removals/merges leave searchable orphans behind).",
   inputSchema: {
     bookId: BookId().optional(),
     ids: jsonArray(BookId()).optional(),
@@ -113,10 +114,15 @@ export const buildIndexTool = defineTool({
       else targets.add(n);
     }
     if (args.query) {
-      const page = await deps.content.search({ query: args.query, library: args.library, num: MAX_QUERY_BOOKS });
-      for (const id of page.bookIds) targets.add(id);
-      if (page.total > page.bookIds.length) {
-        notes.push(`query matched ${page.total} books; indexing the first ${page.bookIds.length} (cap ${MAX_QUERY_BOOKS}).`);
+      // Page through EVERY match (#138): a single capped page silently dropped the rest.
+      const matched = await allMatchingIds(deps, args.query, args.library);
+      for (const id of matched) targets.add(id);
+      if (matched.size > LARGE_SELECTION) {
+        // Long builds can outlive the client's request timeout; up-to-date books are skipped,
+        // so re-running the same call resumes where an interrupted build stopped.
+        notes.push(
+          `query matched ${matched.size} books — a large build; if it is interrupted, re-run the same call to resume (already-indexed books are skipped).`,
+        );
       }
     }
 
@@ -183,7 +189,12 @@ export const buildIndexTool = defineTool({
     let totalFigures = 0;
     let totalUnplaced = 0;
     const bookDetails: BookDetail[] = [];
+    let done = 0;
     for (const bookId of targets) {
+      if (done > 0 && done % PROGRESS_EVERY === 0) {
+        deps.log.info("build progress", { done, of: booksRequested, indexed: booksIndexed, skipped: booksSkipped });
+      }
+      done++;
       try {
         const n = await indexBook(deps, libraryId, bookId, args.force, args.library, keywordOnly, tokenBudgeted);
         if (n === "skipped") booksSkipped++;
@@ -211,7 +222,8 @@ export const buildIndexTool = defineTool({
     let pruned: PruneCounts | undefined;
     if (args.prune) {
       try {
-        const live = await liveBookIds(deps, args.library);
+        // Empty query = every book: the keep-set must be complete, or live rows get deleted.
+        const live = await allMatchingIds(deps, "", args.library);
         // An empty live set means the library listing failed or the server lied — pruning then
         // would wipe the whole index. Refuse instead.
         if (live.size === 0) throw new Error("the library reported 0 books");
@@ -263,15 +275,15 @@ export const buildIndexTool = defineTool({
 });
 
 /**
- * Every book id currently in the library, paged through the search endpoint (empty query =
- * everything). Used as the keep-set for the orphan prune, so it must be complete — a partial
- * page walk would look like "these books are gone" and delete live rows.
+ * Every book id matching `query` (empty = the whole library), paged through the search
+ * endpoint by offset. Feeds both the query selector and the orphan-prune keep-set, so it must
+ * be complete — a partial walk would under-index (#138) or delete live rows (prune).
  */
-async function liveBookIds(deps: ToolDeps, library: string | undefined): Promise<Set<number>> {
+async function allMatchingIds(deps: ToolDeps, query: string, library: string | undefined): Promise<Set<number>> {
   const ids = new Set<number>();
   let offset = 0;
-  for (let page = 0; page < PRUNE_MAX_PAGES; page++) {
-    const res = await deps.content.search({ query: "", library, num: PRUNE_PAGE, offset });
+  for (let page = 0; page < ID_MAX_PAGES; page++) {
+    const res = await deps.content.search({ query, library, num: ID_PAGE, offset });
     for (const id of res.bookIds) ids.add(id);
     if (res.bookIds.length === 0) break;
     offset += res.bookIds.length;
