@@ -204,11 +204,14 @@ function main(): void {
   const n = (x: number | undefined) => (x === undefined ? "—" : x.toFixed(4));
   const pf = (b: boolean) => (b ? "PASS" : "FAIL");
   for (const v of verdicts) {
+    const isBase = v.weight === t.baselineWeight;
+    // The baseline is the reference, not a candidate — its deltas are 0 by construction.
+    const gate = (b: boolean) => (isBase ? "—" : pf(b));
     const L = v.numbers.liveOn;
     const F = v.numbers.fixtureOff;
     const O = v.numbers.fixtureOn;
     out.push(
-      `| ${v.weight}${v.weight === t.baselineWeight ? " (baseline)" : ""} | ${n(L.ru)} / ${n(L.xl)} | ${n(L["exact-identifier"])} | ${n(F.ru)} / ${n(F.xl)} | ${n(F["exact-identifier"])} / ${n(F["front-matter-trap"])} | ${n(O.ru)} / ${n(O.xl)} | ${n(O["exact-identifier"])} / ${n(O["front-matter-trap"])} | ${pf(v.zeroBrokenPass)} | ${pf(v.ruPass)} | ${pf(v.enPass)} |`,
+      `| ${v.weight}${isBase ? " (baseline)" : ""} | ${n(L.ru)} / ${n(L.xl)} | ${n(L["exact-identifier"])} | ${n(F.ru)} / ${n(F.xl)} | ${n(F["exact-identifier"])} / ${n(F["front-matter-trap"])} | ${n(O.ru)} / ${n(O.xl)} | ${n(O["exact-identifier"])} / ${n(O["front-matter-trap"])} | ${pf(v.zeroBrokenPass)} | ${gate(v.ruPass)} | ${gate(v.enPass)} |`,
     );
   }
   out.push("");
