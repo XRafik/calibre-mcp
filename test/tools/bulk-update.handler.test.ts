@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
+import { z } from "zod";
 import { bulkUpdateTool } from "../../src/tools/calibre_bulk_update.js";
 import { loadConfig } from "../../src/config.js";
 import { log } from "../../src/logging.js";
@@ -50,6 +51,14 @@ describe("calibre_bulk_update handler", () => {
     expect(spy).not.toHaveBeenCalled();
     expect(r.structuredContent?.preview).toBe(true);
     expect(r.structuredContent?.matched).toBe(2);
+  });
+
+  it("previews a previously-empty field with before: null (outputSchema-valid)", async () => {
+    const r = await bulkUpdateTool.handler({ changes: { publisher: "Acme" }, ids: [1], preview: true }, deps());
+    const books = r.structuredContent?.books as { changed: unknown[] }[];
+    expect(books[0]!.changed).toEqual([{ field: "publisher", before: null, after: "Acme" }]);
+    const schema = z.object(bulkUpdateTool.outputSchema!);
+    expect(schema.safeParse(JSON.parse(JSON.stringify(r.structuredContent))).success).toBe(true);
   });
 
   it("requires a book set (no ids and no query)", async () => {
