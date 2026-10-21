@@ -3,31 +3,155 @@
   "baselineReport": "reports/2026-07-15-9725d1e-issue18-after.json",
   "nonRegression": {
     "$comment": "Existing kinds with markers now inside chunk text. Gate compares per-query Hit@1 vs the baseline report; every dropped query must be explained in the report regardless of gate color.",
-    "hybrid": { "maxBrokenHit1Queries": 0, "negativesFlagged": 6 },
-    "vector": { "maxBrokenHit1Queries": 0, "negativesFlagged": 6 },
-    "keyword": { "maxBrokenHit1Queries": 1 }
+    "hybrid": {
+      "maxBrokenHit1Queries": 0,
+      "negativesFlagged": 6
+    },
+    "vector": {
+      "maxBrokenHit1Queries": 0,
+      "negativesFlagged": 6
+    },
+    "keyword": {
+      "maxBrokenHit1Queries": 1
+    }
   },
   "figureCaption": {
     "$comment": "New kind: caption semantic search (target: figures). RU-monolingual queries (2) are inside this gate; cross-lingual caption queries are ungated diagnostics (known unweighted-RRF pathology, fixed by the 06-seam effort).",
-    "queryCount": { "min": 6, "max": 8 },
-    "gatedModes": ["hybrid"],
-    "hybrid": { "hit1Min": 0.8, "ndcg10Min": 0.9 },
-    "measuredUngatedModes": ["vector", "keyword"]
+    "queryCount": {
+      "min": 6,
+      "max": 8
+    },
+    "gatedModes": [
+      "hybrid"
+    ],
+    "hybrid": {
+      "hit1Min": 0.8,
+      "ndcg10Min": 0.9
+    },
+    "measuredUngatedModes": [
+      "vector",
+      "keyword"
+    ]
   },
   "figureNegative": {
     "$comment": "Active only once the figures cosine floor is calibrated (two-tier: fixture tier mandatory — 100% flagged, zero positives zeroed; live tier decides ENABLING only, never the release). `active` is the machine flag for that condition — flip it together with FIGURES_SEMANTIC_FLOOR.",
     "active": false,
-    "queryCount": { "min": 3, "max": 4 },
+    "queryCount": {
+      "min": 3,
+      "max": 4
+    },
     "flaggedRate": 1.0,
     "positivesZeroedByFloor": 0
   },
   "filterLayer": {
     "$comment": "#93 filter param (D-019), declared BEFORE implementation (D-012). The semantic filter is candidate-set restriction before exact brute-force cosine/topK — a pure subset of the unfiltered ranking, no ANN recall loss is possible — so no new gated query kind. Gate = (a) the unfiltered suite must not regress: the existing nonRegression block vs baselineReport re-run after the filter layer lands; (b) mandatory unit property tests: restricted searchLibrary/searchLibraryFts return exactly the unfiltered ranking intersected with the allow set, order preserved. Human record: issue #93 resolution comment.",
-    "unfilteredSuite": { "reusesGate": "nonRegression" },
-    "propertyTests": { "required": true, "location": "test/semantic/store-restrict.test.ts" }
+    "unfilteredSuite": {
+      "reusesGate": "nonRegression"
+    },
+    "propertyTests": {
+      "required": true,
+      "location": "test/semantic/store-restrict.test.ts"
+    }
   },
   "liveEval": {
     "$comment": "Before/after diff on the real library is a mandatory triage artifact, NOT a gate — live-relevance.json labels are unverified and the re-index mixes markers + figures + D-016 demotion.",
     "gate": false
+  },
+  "embedderBakeoff140": {
+    "$comment": "#140 embedder bake-off gates, declared + committed BEFORE any candidate run (D-012 protocol). Stack: transformers.js 4.3.1 / onnxruntime-node 1.30 (#139 branch) for EVERY candidate incl. the e5 baseline (re-measured, not the 2026-07-08 numbers). EN gate numbers mirror #142's rrfWeightSweep fixture gates (declared 2026-10-21 on claude/dreamy-mcclintock-39cefb; #142 had published no results/selected weight when these were committed, so the weight is swept here too). Live measurements are NOT gated: a gemma2 live index needs a full-library re-embed (~313k chunks at ~3 chunks/s ≈ 30 h; even the 269 labeled books are ~109k chunks), so the live before/after stays the mandatory post-re-index triage artifact (thresholds.liveEval). Consumed by test/eval/retrieval/bakeoff-140.ts.",
+    "candidates": [
+      "e5-small",
+      "gemma2-768",
+      "gemma2-256"
+    ],
+    "baseline": "e5-small",
+    "rrfWeights": [
+      1.0,
+      1.5,
+      2.0
+    ],
+    "measurements": {
+      "fixtureOn": "fixture, reranker ON (shipped default) — all modes at w=1.0, hybrid at the other weights",
+      "fixtureOff": "fixture, --rerank off — isolates embedder + fusion (the order users get when the reranker is unavailable/busy, #156)"
+    },
+    "operatingPoint": "Per model, apply #142's selection rule to its OWN sweep (fixture-only): among weights whose hybrid EN kinds (exact-identifier, front-matter-trap) drop <= 0.01 nDCG@10 with zero broken Hit@1 vs that model's w=1.0 (fixtureOn AND fixtureOff), pick max fixtureOff hybrid RU-involved nDCG@10; ties -> smaller weight. Candidates are compared to e5 at e5's operating point.",
+    "gates": {
+      "G1_ruGain": {
+        "$comment": "Target axis. fixtureOn e5 already saturates RU (1.000 in the July validation), so On may only not drop.",
+        "fixtureOff": {
+          "vectorRuInvolvedNdcg10MinDelta": 0.05,
+          "hybridRuInvolvedNdcg10MinDelta": 0.02
+        },
+        "fixtureOn": {
+          "hybridRuInvolvedNdcg10MinDelta": 0.0,
+          "vectorRuInvolvedNdcg10MinDelta": 0.0
+        }
+      },
+      "G2_crossLingual": {
+        "fixtureOff": {
+          "vectorCrossLingualNdcg10MinDelta": 0.05
+        }
+      },
+      "G3_enNonRegression": {
+        "$comment": "vs e5 at the operating points. Overall = negatives excluded (report.overall).",
+        "overallNdcg10MaxDrop": {
+          "fixtureOn": 0.01,
+          "fixtureOff": 0.01,
+          "modes": [
+            "hybrid",
+            "vector"
+          ]
+        },
+        "keywordFavouredKinds": {
+          "kinds": [
+            "exact-identifier",
+            "front-matter-trap"
+          ],
+          "modes": [
+            "hybrid"
+          ],
+          "maxNdcg10Drop": 0.01,
+          "maxBrokenHit1Queries": 0,
+          "measurements": [
+            "fixtureOn",
+            "fixtureOff"
+          ]
+        },
+        "semanticParaphrase": {
+          "modes": [
+            "hybrid",
+            "vector"
+          ],
+          "maxNdcg10Drop": 0.02,
+          "measurements": [
+            "fixtureOn",
+            "fixtureOff"
+          ]
+        }
+      },
+      "G4_zeroBroken": {
+        "$comment": "Existing nonRegression gate (thresholds.nonRegression vs baselineReport) on fixtureOn at w=1.0, hybrid + vector. If the e5-4.3.1 baseline itself fails it (ORT drift), that is a #139 finding (re-baseline at the re-index) and candidates are judged per-query vs e5-4.3.1 instead.",
+        "reusesGate": "nonRegression",
+        "modes": [
+          "hybrid",
+          "vector"
+        ]
+      },
+      "G5_throughput": {
+        "$comment": "Embed-only warm chunks/s on a fixed deterministic passage sample, q8, BATCH as the indexer uses. Other sessions load the CPU, so models run INTERLEAVED (e5, gemma2, e5, gemma2, ...) >= 3 rounds; gate on the median ratio. q4 measured informationally if the q4 weights are cheap to fetch. Reported as NOISY.",
+        "minRatioVsE5": 0.3333,
+        "rounds": 3
+      },
+      "G6_ops": {
+        "maxDownloadBytes": 1000000000,
+        "maxStoredDim": 1024,
+        "license": "MIT or Apache-2.0 (D-013 would also admit Gemma terms; gemma2 is Apache-2.0)"
+      }
+    },
+    "floors": {
+      "semanticFloor": "Per model, from fixtureOff vector-mode library-scope maxScore at w=1.0: if every negative's maxScore < every positive's, floor = midpoint of the gap (rounded to 0.01); else the value flagging all 6 negatives while flagging the fewest positives. Reported with the positive/negative ranges; informational for e5 (0.78 stays unless the drift moved it out of the gap).",
+      "RERANK_FLOOR": "Reranker is embedder-independent but ORT 1.30 moves its logits (#139). From fixtureOn rows (hybrid+vector, library-scope): check every negative's maxRerank < 0.3 and count positives below 0.3; change only if a negative crosses 0.3 or the separation midpoint moved by > 0.1."
+    },
+    "selection": "Recommend a swap only if a candidate passes G1-G6 at its operating point. Among passing candidates prefer gemma2-256 over gemma2-768 when its G1/G3 numbers are within 0.01 (3x smaller vectors). Otherwise recommend keeping e5-small (and whether the 4.3.1 bump + its forced re-index still makes sense on its own)."
   }
 }
