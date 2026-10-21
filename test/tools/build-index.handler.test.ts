@@ -190,14 +190,18 @@ describe("calibre_build_index handler", () => {
 
   it("a query selects EVERY match across pages, not just the first 100 (#138)", async () => {
     const libraryIds = Array.from({ length: 1150 }, (_, i) => i + 1);
-    const store = new SqliteIndexStore(loadConfig({ CALIBRE_MCP_INDEX_DIR: ":memory:" }));
+    // Empty text fails each book instantly — this test is about SELECTION, not indexing cost.
     const r = await buildIndexTool.handler(
       args({ query: "id:>=0", keywordOnly: true }),
-      deps({ store, libraryIds }),
+      deps({
+        libraryIds,
+        getText: async () => ({ text: " ", backend: "pdftotext", chars: 1, cached: false, markers: [] }),
+      }),
     );
     expect(r.isError).toBeFalsy();
-    expect(r.structuredContent).toMatchObject({ booksRequested: 1150, booksIndexed: 1150 });
-    expect(store.isBookIndexed("Programming_Books", 1150)).toBe(true);
+    expect(r.structuredContent).toMatchObject({ booksRequested: 1150 });
+    expect(r.structuredContent?.failures as string[]).toHaveLength(1150);
+    expect((r.structuredContent?.failures as string[]).at(-1)).toContain("book 1150");
     // Large selections tell the model a re-run resumes an interrupted build.
     expect((r.content[0] as { text: string }).text).toContain("re-run the same call to resume");
   });
