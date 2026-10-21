@@ -4,6 +4,7 @@
 // so book-level concurrency on ONE thread can't speed them up.
 
 import { frontMatterEnd } from "../domain/structure/chapters.js";
+import type { OutlineEntry } from "../domain/structure/pdf-outline.js";
 import { chunkForEmbeddingAsync, type EmbedChunk } from "./chunk.js";
 import type { Embedder } from "./embedder.js";
 import { MAX_TOKENS, PASSAGE_PREFIX } from "./model.js";
@@ -16,6 +17,8 @@ export interface EncodeJob {
   text: string;
   /** "[title › authors]\n" context prefix — embedded, never stored. */
   ctx: string;
+  /** PDF outline (bookmarks) — preferred chapter-map source for the front-matter boundary (#134). */
+  outline: OutlineEntry[];
   /** Figure captions to embed alongside the passages (empty when none were placed). */
   captions: string[];
   keywordOnly: boolean;
@@ -56,7 +59,7 @@ export function inThreadEncoder(embedder: Embedder): BookEncoder {
         // the conservative char-based default applies.
         chunks = await chunkForEmbeddingAsync(job.text);
       }
-      const fmEnd = chunks.length > 0 ? frontMatterEnd(job.text) : 0;
+      const fmEnd = chunks.length > 0 ? frontMatterEnd(job.text, { outline: job.outline }) : 0;
       const t1 = Date.now();
       if (job.keywordOnly || chunks.length === 0) {
         return { chunks, fmEnd, phaseMs: { chunk: t1 - t0, embed: 0 } };

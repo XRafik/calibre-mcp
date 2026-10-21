@@ -55,6 +55,7 @@ function deps(store: SqliteIndexStore): ToolDeps {
         cached: false,
         markers: [],
         unplaced: 0,
+        outline: [],
       }),
     } as unknown as ToolDeps["extractor"],
     embedder,

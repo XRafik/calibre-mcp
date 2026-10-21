@@ -74,6 +74,7 @@ function semanticDeps(cache: BoardCache): ToolDeps {
     } as unknown as ToolDeps["embedder"],
     index: {
       hasIndex: () => true,
+      indexMeta: () => undefined,
       hasVectors: () => true,
       searchLibrary: () => [libHit(1), libHit(2)],
       searchLibraryFts: () => [],

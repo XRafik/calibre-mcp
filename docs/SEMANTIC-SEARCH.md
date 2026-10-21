@@ -100,6 +100,26 @@ caption, page, the surrounding passage (via the caption's position), and a ready
 The text-search confidence floor doesn't apply to captions (short strings score on a
 different scale); a caption-specific floor will be enabled once calibrated.
 
+## Citation provenance (`indexVersion`)
+
+Every location a search returns — `charStart`/`charEnd` on passages and book hits,
+`charOffset` and `page` on figure hits — is relative to the **extraction + chunking
+generation** that built the index. That generation is the index's `indexVersion`, and
+each successful `calibre_semantic_search` response carries it once: as `indexVersion`
+in `structuredContent` and as one line under the header in the text.
+
+`indexVersion` changes **exactly when stored offsets can move** — a pipeline change that
+shifts chunk boundaries or extracted text bumps it and forces a full rebuild. Additive
+changes (a new column, a new flag) don't bump it, and stored offsets stay valid.
+
+If you persist citations (a study tool, a tutor app, notes that say "book 412,
+chars 84210–85030"), store the `indexVersion` alongside them. When a later response
+reports a different `indexVersion`, treat old offsets as stale and re-locate the
+passage (e.g. search for it again). `calibre_ping` shows the current generation too,
+and flags an index **stale** when it was built by a different model or generation than
+the running server — search refuses such an index until `calibre_build_index force=true`
+rebuilds it. Cross-generation stable anchors are out of scope for now.
+
 ## Multilingual
 
 The model is multilingual by design: English and Russian retrieval are verified, and
@@ -120,7 +140,9 @@ Russian book and vice versa. The keyword half stems both languages, so
 - **Front-matter demotion depends on chapter detection.** Books whose front matter is
   itself heading-structured — a title page, copyright, and praise pages that all look like
   headings, common in EPUBs — report no front matter at all and get no demotion. It applies
-  to roughly half a mixed library.
+  to roughly half a mixed library. PDFs with publisher bookmarks use the outline's first
+  non-front-matter entry as the boundary (the same chapter map `calibre_get_content`
+  `structure: true` shows); books indexed before that change pick it up on re-index.
 - **Extraction improves between releases, but only for books indexed afterwards.** Text
   extraction, figure linkage, and front-matter detection all run at index time, so upgrading
   the server does not retroactively improve an existing index. Rebuild with `force: true`

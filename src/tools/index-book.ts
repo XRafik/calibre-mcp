@@ -102,6 +102,7 @@ export async function prepareBook(deps: ToolDeps, bookId: number, opts: PrepareO
   const encoded = await encoder.encode({
     text: extracted.text,
     ctx,
+    outline: extracted.outline,
     captions: extracted.markers.map((m) => m.caption),
     keywordOnly,
     tokenBudgeted,

@@ -57,9 +57,9 @@ describe("noTextReason", () => {
   });
 });
 
-describe("text cache envelope (v3, #84/#133)", () => {
+describe("text cache envelope (v4, #84/#133/#134)", () => {
   it("round-trips a valid envelope", () => {
-    const env = { v: 3, backend: "pdftotext", text: "body [image #0]", markers: [{ index: 0, charOffset: 5, page: 1, caption: "c" }] };
+    const env = { v: 4, backend: "pdftotext", text: "body [image #0]", markers: [{ index: 0, charOffset: 5, page: 1, caption: "c" }] };
     expect(parseTextCacheEnvelope(JSON.stringify(env))).toEqual(env);
   });
   it("rejects a pre-marker cache payload (raw text, no envelope)", () => {
@@ -71,8 +71,15 @@ describe("text cache envelope (v3, #84/#133)", () => {
   it("rejects a v2 envelope — PyMuPDF text cached before \\f page breaks (#133)", () => {
     expect(parseTextCacheEnvelope(JSON.stringify({ v: 2, backend: "pymupdf", text: "p1\np2", markers: [] }))).toBeNull();
   });
+  it("rejects a v3 envelope — cached before the PDF outline rode along (#134)", () => {
+    expect(parseTextCacheEnvelope(JSON.stringify({ v: 3, backend: "pdftotext", text: "t", markers: [] }))).toBeNull();
+  });
   it("rejects an envelope missing markers", () => {
-    expect(parseTextCacheEnvelope(JSON.stringify({ v: 3, backend: "x", text: "t" }))).toBeNull();
+    expect(parseTextCacheEnvelope(JSON.stringify({ v: 4, backend: "x", text: "t" }))).toBeNull();
+  });
+  it("round-trips the outline and the unplaced count", () => {
+    const env = { v: 4, backend: "pdftotext", text: "t", markers: [], unplaced: 2, outline: [{ title: "Intro", page: 3, level: 1 }] };
+    expect(parseTextCacheEnvelope(JSON.stringify(env))).toEqual(env);
   });
 });
 

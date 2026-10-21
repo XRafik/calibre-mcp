@@ -220,6 +220,22 @@ describe("calibre_get_content handler", () => {
       expect((page.structuredContent as { offset: number }).offset).toBe(chapterText.indexOf("Chapter 2"));
     });
 
+    it("uses the PDF outline when present and labels the detector pdf-outline (#134)", async () => {
+      const paged = ["Cover", "Getting Started\nbody one", "Going Further\nbody two"].join("\n\f");
+      const outline = [
+        { title: "Cover", page: 1, level: 1 },
+        { title: "Getting Started", page: 2, level: 1 },
+        { title: "Going Further", page: 3, level: 1 },
+      ];
+      const r = await getContentTool.handler(
+        args({ structure: true }),
+        deps({ getText: async () => ({ text: paged, backend: "pdftotext", chars: paged.length, cached: false, markers: [], unplaced: 0, outline }) }),
+      );
+      const text = (r.content[0] as { text: string }).text;
+      expect(text).toContain("2 chapters (pdf-outline)");
+      expect((r.structuredContent as { chapters: { startChar: number }[] }).chapters[0]!.startChar).toBe(paged.indexOf("Getting Started"));
+    });
+
     it("reports 0 chapters as a non-error with a steer to the plain walk", async () => {
       const flat = "Just prose, no headings anywhere in this book at all.";
       const r = await getContentTool.handler(
