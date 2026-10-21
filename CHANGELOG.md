@@ -6,6 +6,15 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.7.6] — 2026-10-21
+
+### Changed
+
+- **Release pipeline is re-runnable (#161).** The release workflow now waits (up to 5 min) for the
+  new version to be visible on npm before publishing to the MCP Registry, retries the Registry
+  publish up to 3x, and skips `npm publish` when the version already exists, so a failed release
+  run can be re-run safely. No server behavior changes.
+
 ## [0.7.5] — 2026-10-21
 
 ### Added
