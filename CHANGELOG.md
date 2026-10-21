@@ -6,6 +6,31 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.7.5] — 2026-10-21
+
+### Added
+
+- **ODT books are now extractable (#132).** OpenDocument-text books no longer get reported
+  as having no extractable text format.
+
+### Fixed
+
+- **`calibre_build_index` no longer stops at 100 books (#138).** It now pages through all
+  query matches (reported on a 155k-book library) instead of silently truncating.
+- **Concurrent semantic searches no longer all time out (#156).** They are serialized
+  through a FIFO inference queue.
+- **Faster book-scope and bundle keyword search (#155).** An FTS-first CTE stops SQLite
+  from re-running `MATCH` per row on book-filtered queries.
+- **`calibre_update_book` / `calibre_bulk_update` emit `null` before/after for empty
+  fields**, and pubdate proposals are sentinel-aware (#157).
+- **Richer text output.** `calibre_get_book` now lists formats, ISBN/identifiers, tags,
+  series, publisher, pubdate and languages (#104); EPUB figure search hits show the page
+  (#105); `calibre_get_figures` names the other available format (#106);
+  `calibre_ping` always reports the semantic model and index counts, and the uncaptioned
+  figure-count wording is explicit (#108).
+- **PyMuPDF extraction emits `\f` page breaks like pdftotext (#133)**, so page-to-offset
+  mapping no longer depends on which backend ran.
+
 ## [0.7.4] — 2026-08-21
 
 ### Added
