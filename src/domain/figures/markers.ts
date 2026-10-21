@@ -3,6 +3,7 @@
 // figure it just walked past via calibre_get_figures indexes=[N]. Pure logic — the
 // extraction/caching seam lives in src/calibre/extract.ts.
 
+import { scanPageStarts } from "../page-offsets.js";
 import { matchCaptionLine } from "./captions.js";
 import type { FigureEntry, FigureInventory } from "./inventory.js";
 
@@ -122,15 +123,6 @@ function scanCaptionLines(text: string): CaptionLine[] {
     start += raw.length + 1;
   }
   return found;
-}
-
-/** Start offset of each 1-based page (index p-1), from pdftotext's `\f` breaks. */
-function scanPageStarts(text: string): number[] {
-  const starts = [0];
-  for (let i = 0; i < text.length; i++) {
-    if (text[i] === "\f") starts.push(i + 1);
-  }
-  return starts;
 }
 
 /**

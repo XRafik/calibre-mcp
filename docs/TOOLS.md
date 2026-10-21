@@ -102,7 +102,7 @@ yield no text (Calibre has no OCR).
 | Parameter | Type | Default | Meaning |
 |---|---|---|---|
 | `id` (or `bookId`) | number \| uuid | *(required)* | The book to read |
-| `format` | string | *(auto)* | Which format to extract (e.g. `epub`, `pdf`); auto-picks the best |
+| `format` | string | *(auto)* | Which format to extract (e.g. `epub`, `pdf`); auto-picks the best (EPUB → Markdown → PDF → TXT/AZW3/MOBI/DOCX/ODT/HTMLZ/FB2/RTF) |
 | `maxChars` | number | `8000` | Max characters per excerpt (max 40000) |
 | `sentenceAware` | boolean | `true` | Trim excerpt edges to sentence boundaries |
 | `structure` | boolean | `false` | Return a chapter map instead of book text |
