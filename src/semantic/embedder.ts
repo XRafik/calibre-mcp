@@ -102,6 +102,8 @@ export class TransformersEmbedder implements Embedder {
     private readonly cfg: Config,
     private readonly loadTransformers: TransformersLoader = () =>
       import("@huggingface/transformers"),
+    // Injectable for bake-off smoke tests; production always runs ACTIVE_MODEL.
+    private readonly spec: EmbeddingModelSpec = ACTIVE_MODEL,
   ) {}
 
   async warmup(): Promise<void> {
@@ -120,14 +122,14 @@ export class TransformersEmbedder implements Embedder {
   }
 
   async embedQuery(text: string): Promise<Float32Array> {
-    const [v] = await this.#embed([ACTIVE_MODEL.queryPrefix + text]);
+    const [v] = await this.#embed([this.spec.queryPrefix + text]);
     return v!;
   }
 
   async embedPassages(texts: string[]): Promise<Float32Array[]> {
     const out: Float32Array[] = [];
     for (let i = 0; i < texts.length; i += BATCH) {
-      const batch = texts.slice(i, i + BATCH).map((t) => ACTIVE_MODEL.passagePrefix + t);
+      const batch = texts.slice(i, i + BATCH).map((t) => this.spec.passagePrefix + t);
       out.push(...(await this.#embed(batch)));
     }
     return out;
@@ -136,7 +138,7 @@ export class TransformersEmbedder implements Embedder {
   async #embed(prefixed: string[]): Promise<Float32Array[]> {
     const { embed } = await this.#model();
     const rows = await this.#queue.run(() => embed(prefixed));
-    return rows.map((row) => toStoredVector(row));
+    return rows.map((row) => toStoredVector(row, this.spec));
   }
 
   #model(): Promise<Loaded> {
@@ -180,15 +182,22 @@ export class TransformersEmbedder implements Embedder {
     mod.env.cacheDir = path.join(this.cfg.indexDir, "models");
     mod.env.allowRemoteModels = true;
 
-    const { id, dtype, pooling } = ACTIVE_MODEL;
+    const { id, dtype, pooling, dropConfigKeys } = this.spec;
     let loaded: Loaded;
     if (pooling === "baked-in") {
       // Graph emits `sentence_embedding` (card usage: AutoTokenizer + AutoModel) —
       // running this through the feature-extraction pipeline would re-pool token states
       // and silently skip the model's own projection layers.
       const tokenizer = (await mod.AutoTokenizer.from_pretrained(id)) as unknown as BatchTokenizer;
+      let config: Record<string, unknown> | undefined;
+      if (dropConfigKeys?.length) {
+        // Multimodal repo: null the unused encoders' configs so only the text model loads.
+        config = (await mod.AutoConfig.from_pretrained(id)) as unknown as Record<string, unknown>;
+        for (const key of dropConfigKeys) config[key] = null;
+      }
       const model = (await mod.AutoModel.from_pretrained(id, {
         dtype,
+        ...(config ? { config: config as never } : {}),
       })) as unknown as SentenceEmbeddingModel;
       loaded = {
         embed: async (texts) => {

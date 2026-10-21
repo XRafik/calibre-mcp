@@ -36,6 +36,11 @@ export interface EmbeddingModelSpec {
   pooling: PoolingMode;
   /** ONNX weight variant to load. */
   dtype: "q8" | "fp32" | "q4";
+  /**
+   * Multimodal repos only: config keys nulled before AutoModel load so ONLY the text model
+   * is fetched/initialized (model-card "Selective Encoder Loading"). Baked-in path only.
+   */
+  dropConfigKeys?: readonly string[];
   /** Weights license — the optional-download posture cares (docs/dev/PRODUCT-DECISIONS.md). */
   license: string;
 }
@@ -49,6 +54,10 @@ export interface EmbeddingModelSpec {
  * (nomic-ai repo is sentence-transformers custom code; the only "onnx" port is an empty
  * README repo) and transformers.js 4.2.0 registers `nomic_bert` but not the MoE variant.
  * `jina-v3` excluded on license (CC BY-NC vs our MIT posture).
+ *
+ * The gemma2-* entries need transformers.js >= 4.3.1 (#139), whose onnxruntime-node 1.30
+ * shifts e5-small vectors (cos 0.997–0.999 vs 4.2.0's ORT 1.24.3) — the bump must ship
+ * with a full re-index (INDEX_VERSION bump) + RERANK_FLOOR re-check (#140).
  */
 export const CANDIDATES = {
   // intfloat/multilingual-e5-small card: asymmetric "query: "/"passage: " prefixes are
@@ -91,6 +100,39 @@ export const CANDIDATES = {
     pooling: "baked-in",
     dtype: "q8",
     license: "Gemma (use-restricted)",
+  },
+  // EmbeddingGemma 2 (#139) — sources: google/embeddinggemma-2 config_sentence_transformers.json
+  // (prompts `SearchQuery` = "task: search result | query: ", `Document` = "title: none | text: ")
+  // and the onnx-community/embeddinggemma-2-ONNX README @ daa72c5: graph outputs
+  // `sentence_embedding` (mean pooling + 512→768 projection inside, unit-norm — verified by
+  // loading: equals the card's pipeline output at cos 1.000000); 8,192-token window (chunk
+  // budget held at 512); fp16 IS shipped for v2, but q8 is the CPU pick (worst-case cos to
+  // fp32 0.9997, 314 MB text model; q4 0.988). The repo is multimodal: without nulling the
+  // vision/audio configs every encoder loads (+~530 MB q8). License Apache 2.0.
+  "gemma2-768": {
+    id: "onnx-community/embeddinggemma-2-ONNX",
+    dim: 768,
+    maxTokens: 512,
+    queryPrefix: "task: search result | query: ",
+    passagePrefix: "title: none | text: ",
+    pooling: "baked-in",
+    dtype: "q8",
+    dropConfigKeys: ["vision_config", "audio_config"],
+    license: "Apache-2.0",
+  },
+  // Same card, "Matryoshka Dimension Truncation": keep the leading dims of the 768 output and
+  // re-normalize; "close to lossless down to 256" (MTEB multilingual 61.36 → 60.41).
+  "gemma2-256": {
+    id: "onnx-community/embeddinggemma-2-ONNX",
+    dim: 256,
+    rawDim: 768,
+    maxTokens: 512,
+    queryPrefix: "task: search result | query: ",
+    passagePrefix: "title: none | text: ",
+    pooling: "baked-in",
+    dtype: "q8",
+    dropConfigKeys: ["vision_config", "audio_config"],
+    license: "Apache-2.0",
   },
   // Xenova/bge-m3 card: `{ pooling: 'cls', normalize: true }`, and the BAAI/bge-m3 FAQ:
   // "no longer requires adding instructions to the queries" → no prefixes. 1024-dim,
