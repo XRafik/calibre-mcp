@@ -10,6 +10,7 @@
 import path from "node:path";
 import type { Config } from "../config.js";
 import { ACTIVE_MODEL, type EmbeddingModelSpec } from "./model.js";
+import { InferenceQueue } from "./queue.js";
 import { l2normalize } from "./vector.js";
 
 /**
@@ -93,6 +94,9 @@ export class TransformersEmbedder implements Embedder {
   #tokenizer?: Tokenizer;
   // Sync snapshot of the load outcome for loadState() — updated as #loaded settles.
   #loadState: EmbedderLoadState = "not-attempted";
+  // FIFO, one forward at a time (#156); never refuses — a query embed is ~tens of ms, and a
+  // build's passages queue per BATCH, so a search waits at most one batch behind a build.
+  readonly #queue = new InferenceQueue();
 
   constructor(
     private readonly cfg: Config,
@@ -131,7 +135,7 @@ export class TransformersEmbedder implements Embedder {
 
   async #embed(prefixed: string[]): Promise<Float32Array[]> {
     const { embed } = await this.#model();
-    const rows = await embed(prefixed);
+    const rows = await this.#queue.run(() => embed(prefixed));
     return rows.map((row) => toStoredVector(row));
   }
 

@@ -6,6 +6,7 @@
 import path from "node:path";
 import type { Config } from "../config.js";
 import type { TransformersLoader } from "./embedder.js";
+import { InferenceQueue, QUEUE_BUSY } from "./queue.js";
 
 // Single source of truth for the reranker model (same D-001 principle as model.ts, kept
 // local because model.ts documents the EMBEDDING model contract). bge-reranker-v2-m3:
@@ -27,6 +28,12 @@ export const RERANKER_REVISION = "6f5ff65298512715a1e669753bc754d2bc8f367b";
 export const RERANK_POOL = 30;
 /** Sigmoid scores below this are weak matches — the reranker's own confidence signal. */
 export const RERANK_FLOOR = 0.3;
+/**
+ * Rerank calls allowed to WAIT behind the running one (#156). A full pool costs ~10–15 s, so
+ * running + 2 waiting ≈ 45 s worst case — inside the 60 s default MCP request timeout. A call
+ * past the cap gets RERANKER_BUSY and the search keeps its fused order instead of timing out.
+ */
+export const RERANK_MAX_WAITING = 2;
 /** Pair truncation length. Chunks are budgeted to the e5 window, so nothing real is lost. */
 const MAX_TOKENS = 512;
 
@@ -34,7 +41,8 @@ export interface Reranker {
   /**
    * Score each (query, passage) pair with the cross-encoder; returns one sigmoid-normalized
    * relevance score in [0,1] per passage, in input order. Throws RERANKER_UNAVAILABLE when
-   * the optional model dependency is missing.
+   * the optional model dependency is missing, and RERANKER_BUSY when too many rerank calls
+   * are already queued (the caller degrades to its fused order).
    */
   rerank(query: string, passages: string[]): Promise<number[]>;
   /**
@@ -56,6 +64,8 @@ type SeqClassifier = (inputs: Record<string, unknown>) => Promise<{
 
 export class TransformersReranker implements Reranker {
   #loaded?: Promise<{ tokenizer: PairTokenizer; model: SeqClassifier }>;
+  // One rerank call at a time, FIFO: concurrent calls would interleave forwards and all finish late.
+  readonly #queue = new InferenceQueue(RERANK_MAX_WAITING);
 
   constructor(
     private readonly cfg: Config,
@@ -70,6 +80,21 @@ export class TransformersReranker implements Reranker {
   async rerank(query: string, passages: string[]): Promise<number[]> {
     if (passages.length === 0) return [];
     const { tokenizer, model } = await this.#components();
+    try {
+      // The whole call is one queue task, so a request's pairs never interleave with another's.
+      return await this.#queue.run(() => this.#score(tokenizer, model, query, passages));
+    } catch (err) {
+      if (err instanceof Error && err.message === QUEUE_BUSY) throw new Error("RERANKER_BUSY");
+      throw err;
+    }
+  }
+
+  async #score(
+    tokenizer: PairTokenizer,
+    model: SeqClassifier,
+    query: string,
+    passages: string[],
+  ): Promise<number[]> {
     const scores: number[] = [];
     // Solo scoring (D-011 amendment, #98): one pair per forward. Batched padding made a
     // pair's q8 logit depend on which passages shared its batch (0.1–0.6 logit shifts →

@@ -56,7 +56,7 @@ export const semanticSearchTool = defineTool({
   name: "calibre_semantic_search",
   title: "Semantic search",
   description:
-    "Meaning-based search over the local index. scope=library ranks books; scope=book (needs bookId) ranks passages within one book. target=figures searches figure captions instead of text — use when the user asks for a diagram/chart/schema; hits point at calibre_get_figures for the pixels. mode=hybrid (default) fuses semantic + keyword matches; mode=vector is semantic-only; mode=keyword is exact keyword/FTS (no model at query time). All modes need an index built by calibre_build_index. filter accepts a bundle name to scope library searches (list bundles via calibre_manage_bundles).",
+    "Meaning-based search over the local index. scope=library ranks books; scope=book (needs bookId) ranks passages within one book. target=figures searches figure captions instead of text — use when the user asks for a diagram/chart/schema; hits point at calibre_get_figures for the pixels. mode=hybrid (default) fuses semantic + keyword matches; mode=vector is semantic-only; mode=keyword is exact keyword/FTS (no model at query time). All modes need an index built by calibre_build_index. filter accepts a bundle name to scope library searches (list bundles via calibre_manage_bundles). Model inference is serialized: prefer one call at a time — parallel calls queue, and past a few the extras skip the rerank.",
   inputSchema: {
     query: z.string().min(1).max(512),
     scope: z.enum(["library", "book"]).default("library"),
@@ -649,6 +649,12 @@ const RERANK_NOTE =
   "@huggingface/transformers (see calibre_build_index for install steps) and downloads on first use; " +
   "if you just installed it, restart the MCP server, and ensure the machine is online.";
 
+// #156: concurrent searches past the reranker's queue cap skip the rerank instead of waiting
+// past the client timeout — the results are still useful, just in fused order.
+const RERANK_BUSY_NOTE =
+  "Reranker busy with other concurrent searches — results keep the fused (pre-rerank) order. " +
+  "For reranked results, issue library-scope semantic searches one at a time.";
+
 const RERANK_DISABLED_NOTE =
   "Reranking disabled via CALIBRE_MCP_RERANK — results keep the fused (pre-rerank) order.";
 
@@ -687,8 +693,9 @@ async function applyRerank<T extends { rerankScore?: number }>(
     const hits = [...scored, ...pool.slice(RERANK_POOL)].slice(0, args.topK);
     return { hits, reranked: true, maxRerank: scored[0]?.rerankScore };
   } catch (err) {
-    deps.log.warn("rerank skipped", { reason: err instanceof Error ? err.message : String(err) });
-    return { hits: fused(), reranked: false, note: RERANK_NOTE };
+    const reason = err instanceof Error ? err.message : String(err);
+    deps.log.warn("rerank skipped", { reason });
+    return { hits: fused(), reranked: false, note: reason === "RERANKER_BUSY" ? RERANK_BUSY_NOTE : RERANK_NOTE };
   }
 }
 

@@ -85,6 +85,14 @@ skipped straight to searching on a fresh machine, the first hybrid/vector query 
 After that everything runs offline. Reranking itself also costs seconds of CPU per query;
 `CALIBRE_MCP_RERANK=off` disables it (faster, noticeably less precise ranking).
 
+### Parallel semantic searches come back unreranked ("Reranker busy")
+
+Model inference runs one request at a time, so concurrent `calibre_semantic_search` calls
+queue in arrival order. To keep every call inside the client's request timeout, a search
+that finds more than two rerank calls already waiting skips the rerank and returns the fused
+order with a "Reranker busy" note. Issue library-scope semantic searches one at a time when
+you want every result reranked.
+
 ### A search hit points at a book that no longer exists
 
 `calibre_get_book` / `calibre_get_content` 404 on an id that semantic search just returned:
