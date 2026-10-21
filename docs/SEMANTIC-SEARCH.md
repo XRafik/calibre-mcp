@@ -100,6 +100,26 @@ caption, page, the surrounding passage (via the caption's position), and a ready
 The text-search confidence floor doesn't apply to captions (short strings score on a
 different scale); a caption-specific floor will be enabled once calibrated.
 
+## Citation provenance (`indexVersion`)
+
+Every location a search returns — `charStart`/`charEnd` on passages and book hits,
+`charOffset` and `page` on figure hits — is relative to the **extraction + chunking
+generation** that built the index. That generation is the index's `indexVersion`, and
+each successful `calibre_semantic_search` response carries it once: as `indexVersion`
+in `structuredContent` and as one line under the header in the text.
+
+`indexVersion` changes **exactly when stored offsets can move** — a pipeline change that
+shifts chunk boundaries or extracted text bumps it and forces a full rebuild. Additive
+changes (a new column, a new flag) don't bump it, and stored offsets stay valid.
+
+If you persist citations (a study tool, a tutor app, notes that say "book 412,
+chars 84210–85030"), store the `indexVersion` alongside them. When a later response
+reports a different `indexVersion`, treat old offsets as stale and re-locate the
+passage (e.g. search for it again). `calibre_ping` shows the current generation too,
+and flags an index **stale** when it was built by a different model or generation than
+the running server — search refuses such an index until `calibre_build_index force=true`
+rebuilds it. Cross-generation stable anchors are out of scope for now.
+
 ## Multilingual
 
 The model is multilingual by design: English and Russian retrieval are verified, and

@@ -26,8 +26,9 @@ tools expect.
 
 Confirms the server can reach your running Calibre Content Server (end to end, via
 `calibredb`) and reports semantic-search status — whether the embedding model and its
-dependency are present, and how many vectors the index holds. On success it also returns your
-library's categories. Use it first when something isn't working, or to answer "why is semantic
+dependency are present, how many vectors the index holds, and the index generation
+(`indexVersion`, read from the index itself — flagged **stale** with a rebuild hint when it
+doesn't match the running server). On success it also returns your library's categories. Use it first when something isn't working, or to answer "why is semantic
 search off?".
 
 No parameters.
@@ -231,6 +232,11 @@ figure support need a `force: true` rebuild before `target: figures` finds them.
 Like `calibre_search`, library-scope calls subtract exclusion-marker bundles by default and
 report it (`exclusions applied: […]`). The filter never touches the index — it restricts
 candidates at query time, so creating or changing bundles needs no re-index.
+
+Every successful response carries the index generation once — `indexVersion` in
+`structuredContent` plus one line in the text. Character offsets and figure pages are valid
+only within that generation; store it with any citation you persist (see
+[Citation provenance](SEMANTIC-SEARCH.md#citation-provenance-indexversion)).
 
 > Ask: *"which of my books explain consumer-group rebalancing?"* · *"find passages in book 187 about idempotent producers"* (`scope: book`) · *"find a diagram of the JWT signature flow"* (`target: figures`) · *"what do my databases books say about LSM trees?"* (`filter: databases`)
 
