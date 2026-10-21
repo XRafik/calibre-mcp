@@ -41,9 +41,16 @@ jobs:
       - name: Upgrade npm for OIDC support
         run: npm install -g npm@11.18.0 && npm --version
 
-      # prepublishOnly runs build + tests; auth is OIDC (trusted publisher), no token
+      # prepublishOnly runs build + tests; auth is OIDC (trusted publisher), no token.
+      # Skipped when the version is already on npm, so a failed run can be re-run safely.
       - name: Publish to npm
-        run: npm publish --provenance --access public
+        run: |
+          V="$(node -p "require('./package.json').version")"
+          if npm view "calibre-mcp@$V" version --prefer-online >/dev/null 2>&1; then
+            echo "calibre-mcp@$V already on npm; skipping publish"
+          else
+            npm publish --provenance --access public
+          fi
 
       - name: Build the MCPB bundle
         run: pnpm pack:mcpb
@@ -64,7 +71,21 @@ jobs:
           V="$(node -p "require('./package.json').version")"
           jq --arg v "$V" '.version = $v | .packages[0].version = $v' server.json > server.tmp && mv server.tmp server.json
 
+      # the registry validates the npm version right away; wait out npm propagation lag
+      - name: Wait for the version on npm
+        run: |
+          V="$(node -p "require('./package.json').version")"
+          for i in $(seq 1 30); do
+            npm view "calibre-mcp@$V" version --prefer-online >/dev/null 2>&1 && { echo "npm has $V"; exit 0; }
+            sleep 10
+          done
+          echo "calibre-mcp@$V not visible on npm after 5 min"; exit 1
+
       - name: Publish to the MCP Registry
         run: |
           ./mcp-publisher login github-oidc
-          ./mcp-publisher publish
+          for i in 1 2 3; do
+            ./mcp-publisher publish && exit 0
+            echo "registry publish failed (attempt $i); retrying in 30s"; sleep 30
+          done
+          exit 1
