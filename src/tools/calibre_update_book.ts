@@ -96,8 +96,8 @@ export const updateBookTool = defineTool({
       } catch {
         const changed = fields.map((field) => ({
           field,
-          before: bookFieldValue(before, field),
-          after: changes[field],
+          before: bookFieldValue(before, field) ?? null,
+          after: changes[field] ?? null,
         }));
         return toolOk(
           [
@@ -121,10 +121,12 @@ export const updateBookTool = defineTool({
 
 /** Build the normal success result: per-field before/after diff + noop detection. */
 function appliedResult(id: number, before: Book, after: Book, fields: string[]): ToolResult {
+  // empty fields read back as undefined, which JSON drops — emit null so the required
+  // `before`/`after` keys survive and the committed write isn't rejected by outputSchema
   const changed = fields.map((field) => ({
     field,
-    before: bookFieldValue(before, field),
-    after: bookFieldValue(after, field),
+    before: bookFieldValue(before, field) ?? null,
+    after: bookFieldValue(after, field) ?? null,
   }));
   const noop = changed.every((c) => JSON.stringify(c.before) === JSON.stringify(c.after));
   const summary = noop

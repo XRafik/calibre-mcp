@@ -47,7 +47,7 @@ export function planFormatMoves(target: Book, sources: Book[]): FormatMove[] {
 }
 
 /** Calibre's undefined-date sentinel (0101-01-01…) counts as "no pubdate". */
-function isEmptyDate(d?: string): boolean {
+export function isEmptyDate(d?: string): boolean {
   return !d || d.startsWith("0101-01-01");
 }
 

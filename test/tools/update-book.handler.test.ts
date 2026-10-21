@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
+import { z } from "zod";
 import { updateBookTool } from "../../src/tools/calibre_update_book.js";
 import { loadConfig } from "../../src/config.js";
 import { log } from "../../src/logging.js";
@@ -60,6 +61,18 @@ describe("calibre_update_book handler", () => {
     expect(r.structuredContent?.noop).toBe(false);
   });
 
+  it("sets a previously-empty field without failing the outputSchema", async () => {
+    const r = await updateBookTool.handler(
+      { id: 658, changes: { publisher: "Acme" } },
+      deps({ books: [book(), book({ publisher: "Acme" })] }),
+    );
+    expect(r.isError).toBeFalsy();
+    expect(r.structuredContent?.changed).toEqual([{ field: "publisher", before: null, after: "Acme" }]);
+    // the committed write must survive the SDK's outputSchema validation
+    const schema = z.object(updateBookTool.outputSchema!);
+    expect(schema.safeParse(JSON.parse(JSON.stringify(r.structuredContent))).success).toBe(true);
+  });
+
   it("detects a no-op when before equals after", async () => {
     const r = await updateBookTool.handler(
       { id: 658, changes: { tags: ["old"] } },
@@ -110,7 +123,7 @@ describe("calibre_update_book handler", () => {
     expect((r.content[0] as { text: string }).text).toContain("Updated book 658");
     // diff falls back to the intended value when the re-read is unavailable
     expect(r.structuredContent?.changed).toEqual([
-      { field: "publisher", before: undefined, after: "MIT Press" },
+      { field: "publisher", before: null, after: "MIT Press" },
     ]);
   });
 
