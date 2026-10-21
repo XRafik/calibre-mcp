@@ -1,9 +1,9 @@
-// Heading-structured front-matter detector (issue #102, prototype for D-016). EPUB
-// conversions render the title page, copyright, praise and TOC as Markdown headings, so
-// the chapter detector sees a "chapter" at char 0 and frontMatterEnd claims nothing.
-// This module finds the real body start among those leading headings.
+// Front-matter boundary for semantic-search demotion (D-016, #18): where a book's body
+// starts. The chapter detector's first chapter covers plain-text/PDF books; EPUB
+// conversions render title page, copyright, praise and TOC as Markdown headings, so the
+// detector sees a "chapter" at char 0 — the leading-heading rules below cover those (#102).
 
-import { chapterNumber } from "./chapters.js";
+import { chapterNumber, detectChapters, type DetectOptions } from "./chapters.js";
 
 /** Where the leading front matter ends, and which rule decided it. */
 export interface LeadingFrontMatter {
@@ -15,8 +15,8 @@ export interface LeadingFrontMatter {
   heading?: string;
 }
 
-// Same plausibility guard as D-016's frontMatterEnd: front matter deeper than this is
-// more likely a detector miss than real front matter.
+// A "first chapter" deeper than this is more likely a detector miss than real front matter;
+// claiming 20%+ of a book as front matter would demote genuine body content in search.
 export const FM_MAX_FRACTION = 0.2;
 export const FM_MAX_CHARS = 60_000;
 // A section this short (heading to next heading) is a title page, copyright or
@@ -179,4 +179,21 @@ export function leadingFrontMatter(text: string): LeadingFrontMatter {
     return h.start <= cap ? { end: h.start, rule: "run", heading: h.title } : { end: 0, rule: "none" };
   }
   return { end: 0, rule: "none" };
+}
+
+/**
+ * Char offset where the book's body starts: everything before it (TOC, praise pages,
+ * foreword, preface) is front matter. Takes the later of the first detected chapter
+ * (PDF outline / numeric / structural) and the heading-structured boundary
+ * (`leadingFrontMatter`, #102). Returns 0 — "no front matter claimed" — when neither
+ * finds a plausible boundary (both are capped at min(FM_MAX_FRACTION, FM_MAX_CHARS)).
+ * Powers the front-matter demotion in semantic search (issue #18).
+ */
+export function frontMatterEnd(text: string, opts: DetectOptions = {}): number {
+  const { chapters } = detectChapters(text, opts);
+  const cap = Math.min(FM_MAX_FRACTION * text.length, FM_MAX_CHARS);
+  const first = chapters[0]?.startChar ?? 0;
+  // A title-page heading at char ~0 is a "chapter" to the structural detector; the
+  // heading rules only ever move the boundary later, never earlier.
+  return Math.max(first > cap ? 0 : first, leadingFrontMatter(text).end);
 }

@@ -137,10 +137,14 @@ Russian book and vice versa. The keyword half stems both languages, so
   reproduce the caption line, that figure is left out of the figure corpus — it is never
   linked to the *wrong* passage, just absent. Measured at ~97% of captioned figures on a
   790-book library, with the gaps confined to EPUBs (PDFs linked fully).
-- **Front-matter demotion depends on chapter detection.** Books whose front matter is
-  itself heading-structured — a title page, copyright, and praise pages that all look like
-  headings, common in EPUBs — report no front matter at all and get no demotion. It applies
-  to roughly half a mixed library. PDFs with publisher bookmarks use the outline's first
+- **Front-matter demotion depends on chapter detection.** The boundary is the first
+  chapter heading. For EPUBs, where the title page, copyright, praise and contents are
+  themselves headings, it is the first `Chapter 1` / `1 Title` / `Part I` heading. Failing
+  that, it is the end of the leading run of short and named front-matter sections (preface,
+  acknowledgments, about the author…). Measured on a 773-book library, it covers ~95% of
+  EPUBs and ~58% of PDFs. Books with no headings, or whose first chapter sits past 20% of
+  the text, get no demotion. An `Introduction` that precedes `Chapter 1` counts as front
+  matter. PDFs with publisher bookmarks use the outline's first
   non-front-matter entry as the boundary (the same chapter map `calibre_get_content`
   `structure: true` shows); books indexed before that change pick it up on re-index.
 - **Extraction improves between releases, but only for books indexed afterwards.** Text

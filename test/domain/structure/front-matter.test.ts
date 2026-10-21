@@ -5,6 +5,7 @@ import {
   anchorNumber,
   cleanHeading,
   FM_SHORT_SECTION_CHARS,
+  frontMatterEnd,
   isFrontMatterTitle,
   leadingFrontMatter,
 } from "../../../src/domain/structure/front-matter.js";
@@ -120,5 +121,21 @@ describe("leadingFrontMatter — run rule", () => {
 
   it("returns none for heading-less text", () => {
     expect(leadingFrontMatter(body(10_000))).toEqual({ end: 0, rule: "none" });
+  });
+});
+
+describe("frontMatterEnd — combined boundary", () => {
+  it("claims the heading-structured front matter the structural detector misses (book 929)", () => {
+    const text =
+      "# Vector Databases\n\nCopyright © 2026.\n\n# Preface\n\n" + body(6000) +
+      "# **Chapter 1. **Introduction\n\n" + body(9000) + "# **Chapter 2. **Embeddings\n\n" + body(60_000);
+    expect(frontMatterEnd(text)).toBe(text.indexOf("# **Chapter 1."));
+  });
+
+  it("keeps the chapter detector's boundary when it is later than the heading rules'", () => {
+    // Plain-text front matter, no Markdown headings: only the numeric detector sees it.
+    const front = "Praise for This Book\n\nGreat stuff.\n\nContents\n\nChapter 1: Alpha ..... 9\n";
+    const text = front + "Chapter 1: Alpha\n\n" + "Real body prose. ".repeat(40) + "\nChapter 2: Beta\n\n" + "More prose. ".repeat(40);
+    expect(frontMatterEnd(text)).toBe(text.indexOf("Chapter 1: Alpha\n\nReal body"));
   });
 });
