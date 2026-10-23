@@ -9,6 +9,8 @@ import { mkdir, readFile, rm, unlink, utimes, writeFile } from "node:fs/promises
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { Config } from "../config.js";
+import { labelOnlyPages, type LayoutPage, parseBboxLayout } from "../domain/figures/caption-layout.js";
+import { scanCaptions } from "../domain/figures/captions.js";
 import { buildEpubInventory, parseContainerRootfile, parseOpfSpine, type SpineDoc } from "../domain/figures/epub.js";
 import { buildInventory, type FigureInventory, parsePdfImagesList } from "../domain/figures/inventory.js";
 import { log } from "../logging.js";
@@ -75,7 +77,8 @@ const CACHE_DIR = path.join(tmpdir(), "calibre-mcp-cache");
 // v2: EPUB entries (spineHref/imageHref, svg-render source)
 // v3: caption context guard — wrapped in-text references no longer become figures (#116)
 // v4: multi-line + bare-label captions, reference-tail rejects (#107) — indexes renumber
-const INVENTORY_VERSION = 4;
+// v5: label-only captions recovered from page layout (pdftotext -bbox-layout)
+const INVENTORY_VERSION = 5;
 const RUN_TIMEOUT_MS = 120_000;
 const MAX_LIST_BUFFER = 8 * 1024 * 1024;
 
@@ -317,7 +320,36 @@ export class FigureInventoryService {
     await this.#run(bins.pdftotext, ["-q", "-enc", "UTF-8", src, tmpTxt], timeout);
     const listOut = await this.#run(bins.pdfimages, ["-list", src], timeout);
     const text = await readFile(tmpTxt, "utf8");
-    return buildInventory(text, parsePdfImagesList(listOut));
+    const layout = await this.#readLayout(bins.pdftotext, src, tmpTxt, text, timeout);
+    return buildInventory(text, parsePdfImagesList(listOut), layout);
+  }
+
+  /**
+   * Word geometry for pages with label-only captions, where the caption text sits apart
+   * from its label. One `-bbox-layout` run over the page range: a per-page run costs a
+   * process spawn each, and Manning books carry 100+ such pages. Best-effort — a failed
+   * run leaves those Figures label-only, never fails the inventory.
+   */
+  async #readLayout(
+    pdftotext: string,
+    src: string,
+    tmpTxt: string,
+    text: string,
+    timeout: number,
+  ): Promise<Map<number, LayoutPage> | undefined> {
+    const pages = labelOnlyPages(scanCaptions(text));
+    if (pages.length === 0) return undefined;
+    const first = pages[0] as number;
+    const last = pages[pages.length - 1] as number;
+    const tmpHtml = `${tmpTxt}.bbox.html`;
+    try {
+      await this.#run(pdftotext, ["-q", "-enc", "UTF-8", "-bbox-layout", "-f", String(first), "-l", String(last), src, tmpHtml], timeout);
+      return parseBboxLayout(await readFile(tmpHtml, "utf8"), new Set(pages), first);
+    } catch {
+      return undefined; // #run logged it
+    } finally {
+      await unlink(tmpHtml).catch(() => {});
+    }
   }
 
   async #run(bin: string, args: string[], timeout: number, okCodes: number[] = [0]): Promise<string> {

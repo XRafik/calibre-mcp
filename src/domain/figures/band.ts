@@ -123,7 +123,7 @@ function normalizeLabel(s: string): string {
   return s.replace(/[.:,]+$/, "");
 }
 
-function decodeXml(text: string): string {
+export function decodeXml(text: string): string {
   return text
     .replace(/&#(\d+);/g, (_, n: string) => String.fromCodePoint(Number(n)))
     .replace(/&amp;/g, "&")
