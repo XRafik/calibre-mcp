@@ -543,3 +543,4 @@ describe("figure caption indexing (D-018 Phase B / #86)", () => {
     expect(store.figureCount(LIB, 1)).toBe(0);
   });
 });
+

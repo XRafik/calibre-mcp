@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   chooseExtractFormat,
   ebookConvertArgs,
+  isEvictableCacheFile,
   noTextReason,
   parseTextCacheEnvelope,
   pdftotextArgs,
@@ -90,5 +91,20 @@ describe("extractor argv builders", () => {
     const args = ebookConvertArgs("/a.epub", "/a.txt");
     expect(args).toContain("--txt-output-formatting=markdown");
     expect(args).not.toContain("--asciiize");
+  });
+});
+
+describe("isEvictableCacheFile (#99 concurrent builds)", () => {
+  it("evicts cache entries: text envelopes, legacy .txt, figure inventories", () => {
+    expect(isEvictableCacheFile("0123456789abcdef0123456789abcdef.v4.json")).toBe(true);
+    expect(isEvictableCacheFile("0123456789abcdef0123456789abcdef.txt")).toBe(true);
+    expect(isEvictableCacheFile("fg-0123456789abcdef0123456789abcdef.json")).toBe(true);
+  });
+
+  it("never evicts another book's in-flight temp files", () => {
+    expect(isEvictableCacheFile("tx-6f1c2a9e-1b2c-4d5e-8f90-123456789abc.txt")).toBe(false);
+    expect(isEvictableCacheFile("fg-6f1c2a9e-1b2c-4d5e-8f90-123456789abc.txt")).toBe(false);
+    expect(isEvictableCacheFile("dl-6f1c2a9e-1b2c-4d5e-8f90-123456789abc.pdf")).toBe(false);
+    expect(isEvictableCacheFile("fx-6f1c2a9e-1b2c-4d5e-8f90-123456789abc")).toBe(false);
   });
 });

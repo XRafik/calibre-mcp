@@ -6,19 +6,15 @@
 // Per-book failures are collected, not fatal. The write gate disables this tool by default.
 
 import { z } from "zod";
-import { chooseExtractFormat, noTextReason } from "../calibre/extract.js";
-import { frontMatterEnd } from "../domain/structure/chapters.js";
 import { BookId, CoercedBool, jsonArray } from "./coerce.js";
 import { defineTool } from "./define.js";
+import { commitBook, describeError, prepareBook, type BookDetail, type PrepareResult } from "./index-book.js";
 import { resolveNumericId } from "./resolve-id.js";
 import { INSTALL_TRANSFORMERS } from "./remediation.js";
 import { toolError, toolOk } from "./result.js";
-import type { IndexedChunk, IndexedFigure, PruneCounts } from "../semantic/store.js";
-import type { FigureMarker } from "../domain/figures/markers.js";
+import type { PruneCounts } from "../semantic/store.js";
 import type { ToolDeps } from "./types.js";
-import type { EmbedChunk } from "../semantic/chunk.js";
-import { chunkForEmbedding } from "../semantic/chunk.js";
-import { MAX_TOKENS, PASSAGE_PREFIX } from "../semantic/model.js";
+import { runBookPipeline } from "../semantic/book-pipeline.js";
 
 /** Page size when listing query matches / the whole library (ids only — the response is tiny). */
 const ID_PAGE = 1000;
@@ -29,8 +25,14 @@ const LARGE_SELECTION = 100;
 /** Progress line to stderr every N books, so a long build is observable in the server log. */
 const PROGRESS_EVERY = 25;
 
-/** Floor on the token budget — a pathologically long title/authors prefix can't starve chunks. */
-const MIN_TOKEN_BUDGET = 64;
+/**
+ * Books in flight per build call. 1 on purpose (#99 bench): chunking + tokenizing are
+ * main-thread JS, so in-thread book concurrency bought 0-6%, while each extra in-flight book
+ * makes a concurrent search's query embed wait behind one more passage batch. The real win is
+ * worker threads (scripts/reindex.ts --encoder threads) — not wired into the server yet,
+ * since each thread loads its own model copy (~0.9 GB) inside the long-lived server process.
+ */
+const BUILD_CONCURRENCY = 1;
 
 export const buildIndexTool = defineTool({
   name: "calibre_build_index",
@@ -189,24 +191,38 @@ export const buildIndexTool = defineTool({
     let totalFigures = 0;
     let totalUnplaced = 0;
     const bookDetails: BookDetail[] = [];
-    let done = 0;
-    for (const bookId of targets) {
-      if (done > 0 && done % PROGRESS_EVERY === 0) {
-        deps.log.info("build progress", { done, of: booksRequested, indexed: booksIndexed, skipped: booksSkipped });
-      }
-      done++;
-      try {
-        const n = await indexBook(deps, libraryId, bookId, args.force, args.library, keywordOnly, tokenBudgeted);
-        if (n === "skipped") booksSkipped++;
-        else {
-          booksIndexed++;
-          totalChunks += n.chunks;
-          totalFigures += n.figures;
-          totalUnplaced += n.unplaced;
-          bookDetails.push(n);
+    let settled = 0;
+    // Book-level pipeline (#99): write-free prepare per book, one serialized writer commits —
+    // the same path the threaded bulk re-index uses, so both keep the single-writer invariant.
+    const outcomes = await runBookPipeline<PrepareResult>([...targets], BUILD_CONCURRENCY, {
+      prepare: (bookId) =>
+        prepareBook(deps, bookId, { libraryId, library: args.library, force: args.force, keywordOnly, tokenBudgeted }),
+      commit: (_bookId, prepared) => {
+        if (prepared.kind === "ready") commitBook(deps, libraryId, prepared);
+      },
+      onSettled: (o) => {
+        settled++;
+        if (settled % PROGRESS_EVERY === 0) {
+          deps.log.info("build progress", { done: settled, of: booksRequested });
         }
-      } catch (err) {
-        failures.push(`book ${bookId}: ${describeError(err)}`);
+        if (!o.ok) {
+          deps.log.warn("book failed", { bookId: o.bookId, stage: o.stage, reason: describeError(o.error) });
+        }
+      },
+    });
+    // Tally in selection order, so the result reads the same whatever order books finished in.
+    for (const o of outcomes) {
+      if (!o.ok) {
+        failures.push(`book ${o.bookId}: ${describeError(o.error)}`);
+      } else if (o.prepared.kind === "skipped") {
+        booksSkipped++;
+      } else {
+        const d = o.prepared.detail;
+        booksIndexed++;
+        totalChunks += d.chunks;
+        totalFigures += d.figures;
+        totalUnplaced += d.unplaced;
+        bookDetails.push(d);
       }
     }
     if (totalUnplaced > 0) {
@@ -292,188 +308,7 @@ async function allMatchingIds(deps: ToolDeps, query: string, library: string | u
   return ids;
 }
 
-/** Per-book diagnostics surfaced to structuredContent — the re-index triage record (#87). */
-interface BookDetail {
-  bookId: number;
-  format: string;
-  backend: string;
-  cached: boolean;
-  chars: number;
-  chunks: number;
-  frontMatterChunks: number;
-  figures: number;
-  unplaced: number;
-}
-
-/** Index one book. Returns chunk/figure counts, or "skipped" when already up to date. */
-async function indexBook(
-  deps: ToolDeps,
-  libraryId: string,
-  bookId: number,
-  force: boolean,
-  library: string | undefined,
-  keywordOnly: boolean,
-  tokenBudgeted: boolean,
-): Promise<BookDetail | "skipped"> {
-  const book = await deps.content.getBook(bookId, library);
-
-  if (!force && deps.index.isBookIndexed(libraryId, bookId, book.lastModified ?? "")) {
-    return "skipped";
-  }
-
-  const fmt = chooseExtractFormat(book.formats);
-  if (!fmt) {
-    const avail = book.formats.length ? book.formats.join(", ") : "none";
-    throw new Error(`no extractable text format (available: ${avail})`);
-  }
-
-  const base = deps.config.serverUrl.replace(/\/+$/, "");
-  const downloadUrl = `${base}/get/${fmt.toUpperCase()}/${bookId}/${encodeURIComponent(libraryId)}`;
-  const cacheKey = `${bookId}:${fmt}:${book.lastModified ?? ""}`;
-  const extracted = await deps.extractor.getText({ bookId, format: fmt, downloadUrl, cacheKey });
-
-  if (extracted.text.trim().length === 0) {
-    throw new Error(`no extractable text (${fmt}) — ${noTextReason(fmt)}`);
-  }
-
-  // Deterministic context prefix — captures most of contextual-retrieval's benefit at zero
-  // LLM cost. It goes into the EMBEDDED text only; the stored body stays the raw chunk so
-  // char offsets still line up with calibre_get_content.
-  const ctx = `[${book.title} › ${book.authors.join(", ")}]\n`;
-
-  let chunks: EmbedChunk[];
-  if (!keywordOnly && tokenBudgeted) {
-    // Budget in REAL model tokens: the e5 window minus what the "passage: " + context
-    // prefixes consume, so RU chunks stop being over-conservative and EN chunks stop
-    // silently wasting window. countTokens is safe here — warmup succeeded (tokenBudgeted).
-    const budget = Math.max(MIN_TOKEN_BUDGET, MAX_TOKENS - deps.embedder.countTokens(PASSAGE_PREFIX + ctx));
-    chunks = chunkForEmbedding(extracted.text, { budget, lengthFn: (s) => deps.embedder.countTokens(s) });
-  } else {
-    // No loaded model (keyword-only or a failed warmup) — no token window to respect;
-    // the conservative char-based default applies.
-    chunks = chunkForEmbedding(extracted.text);
-  }
-  if (chunks.length === 0) throw new Error("produced no chunks");
-
-  // Chunks that are MOSTLY before the first detected chapter are front matter (TOC/praise/
-  // foreword) — search demotes them below body matches (issue #18). Majority overlap, not
-  // full containment: chunks run ~2k chars, so the whole front matter usually lands inside
-  // one boundary-straddling chunk that a containment rule would never flag.
-  const fmEnd = frontMatterEnd(extracted.text, { outline: extracted.outline });
-  const isFrontMatter = (c: EmbedChunk): boolean =>
-    fmEnd > 0 && Math.min(c.charEnd, fmEnd) - c.charStart >= 0.5 * (c.charEnd - c.charStart);
-
-  let indexed: IndexedChunk[];
-  if (keywordOnly) {
-    // No embeddings — chunks are stored raw + pre-stemmed (in the store) for FTS keyword search.
-    indexed = chunks.map((c) => ({
-      charStart: c.charStart,
-      charEnd: c.charEnd,
-      body: c.body,
-      frontMatter: isFrontMatter(c),
-    }));
-  } else {
-    const vectors = await deps.embedder.embedPassages(chunks.map((c) => ctx + c.body));
-    indexed = chunks.map((c, i) => ({
-      charStart: c.charStart,
-      charEnd: c.charEnd,
-      body: c.body,
-      frontMatter: isFrontMatter(c),
-      vector: vectors[i]!,
-    }));
-  }
-  // Figure captions (D-018 Phase B / #86): every placed marker becomes a figures row —
-  // caption + char_offset come from the marker (same text coordinates as the chunks above),
-  // source/dims from the figure inventory (already cached by marker injection). Captions get
-  // their own embeddings so target:"figures" search ranks them directly.
-  let figures: IndexedFigure[] = [];
-  if (extracted.markers.length > 0) {
-    figures = await figureRows(deps, { bookId, format: fmt, downloadUrl, cacheKey }, extracted.markers);
-    if (!keywordOnly && figures.length > 0) {
-      const vectors = await deps.embedder.embedPassages(figures.map((f) => ctx + f.caption));
-      figures = figures.map((f, i) => ({ ...f, vector: vectors[i]! }));
-    }
-  }
-
-  deps.index.replaceBook(
-    libraryId,
-    { bookId, title: book.title, authors: book.authors, lastModified: book.lastModified },
-    indexed,
-    figures,
-  );
-  const frontMatterChunks = indexed.filter((c) => c.frontMatter).length;
-  deps.log.info("indexed book", {
-    bookId,
-    chunks: indexed.length,
-    figures: figures.length,
-    unplaced: extracted.unplaced,
-    frontMatterChunks,
-    format: fmt,
-    backend: extracted.backend,
-    keywordOnly,
-  });
-  return {
-    bookId,
-    format: fmt,
-    backend: extracted.backend,
-    cached: extracted.cached,
-    chars: extracted.chars,
-    chunks: indexed.length,
-    frontMatterChunks,
-    figures: figures.length,
-    unplaced: extracted.unplaced,
-  };
-}
-
-/**
- * Marker → IndexedFigure rows. The inventory is best-effort: it should be a cache hit
- * (marker injection just built it), but if it is unavailable the captions still index —
- * only source/dims are omitted (never guessed) — and figure indexing never fails the book.
- */
-async function figureRows(
-  deps: ToolDeps,
-  invArgs: { bookId: number; format: string; downloadUrl: string; cacheKey: string },
-  markers: FigureMarker[],
-): Promise<IndexedFigure[]> {
-  let entries: Array<{ source?: "raster" | "page-render" | "svg-render"; width?: number; height?: number }> = [];
-  try {
-    const { inventory } = await deps.figures.getInventory(invArgs);
-    entries = inventory.entries;
-  } catch (err) {
-    deps.log.warn("figure inventory unavailable at index time — captions indexed without source/dims", {
-      bookId: invArgs.bookId,
-      msg: err instanceof Error ? err.message.slice(0, 200) : String(err),
-    });
-  }
-  return markers.map((m) => {
-    const e = entries[m.index];
-    return {
-      figIndex: m.index,
-      page: m.page,
-      caption: m.caption,
-      charOffset: m.charOffset,
-      format: invArgs.format,
-      ...(e?.source !== undefined ? { source: e.source } : {}),
-      ...(e?.width !== undefined ? { width: e.width } : {}),
-      ...(e?.height !== undefined ? { height: e.height } : {}),
-    };
-  });
-}
-
 /** True when an error is the coded "embedding model not installed" signal. */
 function isEmbedderUnavailable(err: unknown): boolean {
   return (err instanceof Error ? err.message : String(err)) === "EMBEDDER_UNAVAILABLE";
-}
-
-/** Concise, LLM-actionable reason for a per-book failure (coded errors → plain English). */
-function describeError(err: unknown): string {
-  const m = err instanceof Error ? err.message : String(err);
-  if (m === "EMBEDDER_UNAVAILABLE") {
-    return "embedding model unavailable — install @huggingface/transformers";
-  }
-  if (m === "NO_PDF_BACKEND") return "no PDF text extractor (install poppler or PyMuPDF)";
-  if (m === "NO_EPUB_BACKEND") return "no ebook extractor (needs Calibre ebook-convert)";
-  if (m === "EXTRACT_TIMEOUT") return "extraction timed out (file too large)";
-  if (m === "EXTRACT_FAILED") return "extraction failed";
-  return m;
 }
