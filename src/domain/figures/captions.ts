@@ -88,3 +88,22 @@ export function matchCaptionLine(
   }
   return null;
 }
+
+// Caption-dedicated blocks (EPUB figcaption/h1–h6, their markdown `#####` rendering in the
+// ebook-convert txt) hold captions, never prose, so a numbered "Figure 4.1 Standard RL loop"
+// WITHOUT a separator is trustworthy there (pandoc and newer Manning EPUBs emit exactly
+// that). In running text the separator stays required, or in-text references ("Figure 4.1
+// and how it compares…") would false-match. Greedy label first, so "4.1" stays whole (the
+// strict pattern would misread the label's own dot as the separator); separator optional.
+const RELAXED_EN = /^(?:Figure|FIGURE|Fig\.)\s?(\d+(?:[-–.]\d+)?[a-z]?)(?:\s*[.:]|\s+[–—-])?(?:\s+|$)(.*)$/u;
+
+/**
+ * Match the text of a caption-dedicated block (heading/figcaption): the separator-less
+ * form first, then the regular caption patterns. Null when it isn't a caption.
+ */
+export function matchCaptionElement(text: string): { label: string; text: string } | null {
+  if (text.length > 300) return null;
+  const relaxed = RELAXED_EN.exec(text);
+  if (relaxed) return { label: relaxed[1] ?? "", text: (relaxed[2] ?? "").trim() };
+  return matchCaptionLine(text);
+}

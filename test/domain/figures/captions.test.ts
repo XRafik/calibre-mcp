@@ -2,7 +2,7 @@
 // (Software Architecture Metrics, System Programming in Linux, Nikolskiy, Lesovsky).
 
 import { describe, expect, it } from "vitest";
-import { matchCaptionLine, scanCaptions, splitPages } from "../../../src/domain/figures/captions.js";
+import { matchCaptionElement, matchCaptionLine, scanCaptions, splitPages } from "../../../src/domain/figures/captions.js";
 
 describe("matchCaptionLine", () => {
   it("matches O'Reilly dot captions", () => {
@@ -112,5 +112,15 @@ describe("Manning double-space captions (probe #77)", () => {
 
   it("rejects a wide gap followed by lowercase (reference shape, not a caption)", () => {
     expect(matchCaptionLine("Figure 2.12  displays the flow between components")).toBeNull();
+  });
+});
+
+describe("matchCaptionElement", () => {
+  it("should accept the separator-less form", () => {
+    expect(matchCaptionElement("Figure 4.1 Standard RL loop")).toEqual({ label: "4.1", text: "Standard RL loop" });
+  });
+
+  it("should reject a block over 300 chars", () => {
+    expect(matchCaptionElement(`Figure 1.1 ${"x".repeat(300)}`)).toBeNull();
   });
 });
