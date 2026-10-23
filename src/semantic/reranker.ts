@@ -27,7 +27,11 @@ export const RERANKER_REVISION = "6f5ff65298512715a1e669753bc754d2bc8f367b";
  * the cap are appended after the reranked head in fused order (they carry no rerank score).
  */
 export const RERANK_POOL = 30;
-/** Sigmoid scores below this are weak matches — the reranker's own confidence signal. */
+/**
+ * Sigmoid scores below this are weak matches — the reranker's own confidence signal. Re-checked
+ * 2026-10-23 (D-022): on the real library 0.3 flags ~3% of correct answers and every negative;
+ * lower floors only look better on the short synthetic fixture and leak real negatives.
+ */
 export const RERANK_FLOOR = 0.3;
 /**
  * Rerank calls allowed to WAIT behind the running one (#156). A full pool costs ~10–15 s, so
