@@ -94,7 +94,34 @@ export function scanCaptions(text: string): Caption[] {
       if (hit) captions.push({ page: p + 1, ...hit });
     }
   }
-  return captions;
+  return dropStrayLabels(captions);
+}
+
+// A page carrying this many label-only heads is a list of figures or a back-of-book
+// index ("ARP message format / Figure 13-6 / 218"), not figures (book 1111: 322 rows).
+const LABEL_LIST_PAGE_MIN = 4;
+
+/**
+ * Drop label-only captions that aren't figures: a label that also has a real caption
+ * elsewhere (the label-only one is a reference or an index entry), and every label-only
+ * head on a page dense with them. Label-only figures with no captioned twin stay.
+ */
+function dropStrayLabels(captions: Caption[]): Caption[] {
+  const captioned = new Set(captions.filter((c) => c.text !== "").map((c) => normalizeLabel(c.label)));
+  const labelOnlyPerPage = new Map<number, number>();
+  for (const c of captions) {
+    if (c.text === "") labelOnlyPerPage.set(c.page, (labelOnlyPerPage.get(c.page) ?? 0) + 1);
+  }
+  return captions.filter(
+    (c) =>
+      c.text !== "" ||
+      (!captioned.has(normalizeLabel(c.label)) && (labelOnlyPerPage.get(c.page) ?? 0) < LABEL_LIST_PAGE_MIN),
+  );
+}
+
+/** Label separators vary within one book (`2-1` vs `2.1` vs `2–1`) — compare canonically. */
+function normalizeLabel(label: string): string {
+  return label.replace(/[-–.,]/g, ".");
 }
 
 /** The caption starting at `lines[i]` with its continuation lines joined; null when none. */

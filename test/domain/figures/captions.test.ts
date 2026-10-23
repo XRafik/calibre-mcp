@@ -172,3 +172,22 @@ describe("caption continuation (#107)", () => {
     expect(matchCaptionLine("рис. 11.10) или, в случае HDFS, может")).toBeNull();
   });
 });
+
+describe("stray label-only heads (#107)", () => {
+  it("should_drop_a_label_only_head_whose_label_has_a_real_caption_elsewhere", () => {
+    const text = ["Рис. 7.2", "", "prose"].join("\n") + "\f" + "Рис. 7.2. Схема ветвления";
+    expect(scanCaptions(text)).toEqual([{ page: 2, label: "7.2", text: "Схема ветвления" }]);
+  });
+
+  it("should_drop_label_only_heads_on_a_list_of_figures_page", () => {
+    // back-of-book index of The TCP/IP Guide (book 1111): topic / label / page number
+    const page = ["ARP message format", "", "Figure 13-6", "", "218", "", "ARP Proxy operation", "", "Figure 13-7", "", "222", "", "Figure 30-9", "", "Figure 13-1", ""].join("\n");
+    expect(scanCaptions(page)).toEqual([]);
+  });
+
+  it("should_keep_a_label_only_figure_without_a_captioned_twin", () => {
+    expect(scanCaptions(["HEAD", "", "Figure 1.2", "", "TV 2 consumer"].join("\n"))).toEqual([
+      { page: 1, label: "1.2", text: "" },
+    ]);
+  });
+});
