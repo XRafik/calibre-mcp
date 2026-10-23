@@ -149,18 +149,34 @@ function readCaption(lines: string[], i: number): { label: string; text: string 
     // blank next line: a label-only Figure (RU "Рис. 7.2" under a diagram) — still a Figure
   }
 
-  for (let added = 0; added < MAX_CONTINUATION_LINES; added++) {
+  let joined = 0;
+  for (; joined < MAX_CONTINUATION_LINES; joined++) {
     if (hit.text === "" || hit.text.length >= CAPTION_MAX || TERMINAL.test(hit.text)) break;
     const cont = (lines[next] ?? "").trim();
-    if (cont === "" || matchCaptionLine(cont) || BARE_LABEL.test(cont)) break;
+    if (endsBlock(cont)) break;
     if (!block && !CONTINUES.test(cont) && !DANGLING.test(hit.text)) break;
     hit.text = joinLine(hit.text, cont);
     next++;
+  }
+  // A block caption is a short self-contained run under its label. Body prose that
+  // happens to follow a label ("Figure 2-2" / "Figure 2-3 shows the same information…",
+  // book 947) runs on past it — keep the label-only Figure, not the paragraph.
+  if (block) {
+    const isolated = endsBlock((lines[next] ?? "").trim());
+    const shortSentence = TERMINAL.test(hit.text) && joined <= 1;
+    if (FIGURE_WORD.test(hit.text) || !(isolated || shortSentence)) hit.text = "";
   }
   // mark a cut caption instead of ending silently mid-clause
   if (hit.text.length > CAPTION_MAX) hit.text = `${hit.text.slice(0, CAPTION_MAX - 1)}…`;
   else if (DANGLING.test(hit.text)) hit.text = `${hit.text}…`;
   return hit;
+}
+
+const FIGURE_WORD = /^(?:Figure|FIGURE|Fig\.|Рис)/u;
+
+/** A blank line or the next caption ends a caption's run of lines. */
+function endsBlock(line: string): boolean {
+  return line === "" || matchCaptionLine(line) !== null || BARE_LABEL.test(line);
 }
 
 /** A line that is only a figure label; the #116 run-on guard applies as for any caption. */

@@ -191,3 +191,16 @@ describe("stray label-only heads (#107)", () => {
     ]);
   });
 });
+
+describe("block captions under a bare label (#107)", () => {
+  it("should_keep_label_only_when_body_prose_follows_the_label", () => {
+    // book 947 p.71: the label sits under the diagram, the paragraph resumes right after
+    const page = ["Vice President", "", "Figure 2-3", "You can even think of the information in this book as a tree", "paragraphs and sections; sections contain paragraphs", "which contain words, which contain characters.)", "More text follows here."].join("\n");
+    expect(scanCaptions(page)).toEqual([{ page: 1, label: "2-3", text: "" }]);
+  });
+
+  it("should_not_take_a_figure_reference_as_the_caption_text", () => {
+    const page = ["Accounting", "", "Figure 2-2", "Figure 2-3 shows the same information in a slightly different way", "vertically in a way similar to that used by Windows", "In a pipe system"].join("\n");
+    expect(scanCaptions(page)[0]).toEqual({ page: 1, label: "2-2", text: "" });
+  });
+});
