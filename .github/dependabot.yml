@@ -20,6 +20,9 @@ updates:
       # ext-apps 2.x targets SDK-v2 callbacks (ServerContext); we stay on SDK 1.x until the v2 migration
       - dependency-name: "@modelcontextprotocol/ext-apps"
         update-types: ["version-update:semver-major"]
+      # TS 7 (native compiler) is a toolchain migration, not a routine bump
+      - dependency-name: typescript
+        update-types: ["version-update:semver-major"]
     groups:
       dev-dependencies:
         dependency-type: development
