@@ -8,7 +8,7 @@ export interface Caption {
   page: number;
   /** Figure number as printed (`1-1`, `15.7`) — kept as a string, separators vary. */
   label: string;
-  /** Caption text after the label, trimmed; may be empty when the line is bare. */
+  /** Caption text after the label, wrapped lines joined; empty for a label-only Figure. */
   text: string;
 }
 
@@ -18,7 +18,9 @@ export interface Caption {
 // dash ("Figure 12.1 – Logical architecture…", EPUB probe #78; space required so the
 // label's own hyphen never reads as a separator). Leading \f is real: pdftotext starts
 // each page with a form feed, and a caption can be the first line of a page.
-// RU: `Рис. 15.7.` (Lesovsky) and no-space `рис.15.7` (Nikolskiy).
+// RU: `Рис. 15.7.` (Lesovsky), no-space `рис.15.7` (Nikolskiy), `Рисунок 3. …`.
+const RU_PATTERN = /^[\f\s]*(?:Рис(?:унок)?|рис(?:унок)?)\.?\s?(\d+(?:[.,–-]\d+)?)\.?\s*[–—-]?\s*(.*)$/u;
+
 const CAPTION_PATTERNS: readonly RegExp[] = [
   // EN: Figure 1-1. … | Figure 1.1: … | Fig. 3. … | Figure 12.1 – …
   // (?!\d) keeps a dotted label whole: "Figure 4.1 and…" must not backtrack into
@@ -29,8 +31,7 @@ const CAPTION_PATTERNS: readonly RegExp[] = [
   // separator → label "4", text "1 Text"). Text must not start lowercase — that's
   // the in-text-reference shape ("Figure 2.12  displays…" wrapped oddly).
   /^[\f\s]*(?:Figure|FIGURE|Fig\.)\s?(\d+(?:[-–.]\d+)?[a-z]?)(?:[ \t]{2,})(?![a-zа-яё])(\S.*)$/u,
-  // RU: Рис. 15.7. … | рис.15.7 … | Рисунок 3. …
-  /^[\f\s]*(?:Рис(?:унок)?|рис(?:унок)?)\.?\s?(\d+(?:[.,–-]\d+)?)\.?\s*[–—-]?\s*(.*)$/u,
+  RU_PATTERN,
 ];
 
 // Context guard (#116): an in-text reference that wraps to the start of a line is
@@ -55,18 +56,106 @@ export function splitPages(text: string): string[] {
   return text.split("\f");
 }
 
-/** Scan extracted text (with `\f` page breaks) for caption lines, in document order. */
+// Two-line bare label (#107): "Figure 2.10" alone on its line, caption text on the next
+// (Modern Processor Design, Manning PDFs, RU "Рис. 7.2" under a diagram). PDF page text
+// only — matchCaptionLine stays single-line for EPUB blocks and marker placement.
+const BARE_LABEL = /^[\f\s]*(?:Figure|FIGURE|Fig\.)\s?(\d+(?:[-–.]\d+)?[a-z]?)\s*$/u;
+// Caption text opening on closing punctuation is the referring sentence running on past
+// the label: "(см.\nрис. 11.10) или…" — the "(см." period fools the #116 guard (#107).
+const REFERENCE_TAIL = /^[)\]},;]/u;
+// RU captions start capitalized; "рис. 3.18 наглядно видно…" and "рис. 3.2 (справа)."
+// are references (books 503, 590). EN keeps lowercase starts: identifiers lead real
+// captions ("tcp_v4_do_rcv …").
+const RU_REFERENCE_TEXT = /^\(?[а-яё]/u;
+// Dingbat-font separator glyphs land in the Private Use Area (book 610 prints U+F076
+// between "Рис. 1.1" and the text).
+const PUA_LEAD = /^[\uE000-\uF8FF]\s*/u;
+
+// Multi-line captions (#107): pdftotext breaks captions at the column edge, so the
+// scan joins continuation lines. A continuation starts lowercase or "(", or follows a
+// dangling function word; captions set as a block under a bare label are Title Case, so
+// there any line continues until terminal punctuation. Blank lines and caption lines end
+// it, as do the caps — a caption longer than that is a paragraph we'd be swallowing.
+const TERMINAL = /[.!?…]["'”»)]?$/u;
+const DANGLING =
+  /(?:^|\s)(?:a|an|the|of|and|or|to|for|in|on|with|by|from|at|as|into|via|its|their|that|which|и|или|в|во|на|для|с|со|по|из|к|о|об|от|при|а|но|что|как)$/iu;
+const CONTINUES = /^[a-zа-яё(]/u;
+const MAX_CONTINUATION_LINES = 3;
+const CAPTION_MAX = 300;
+
+/** Scan extracted text (with `\f` page breaks) for captions, in document order. */
 export function scanCaptions(text: string): Caption[] {
   const captions: Caption[] = [];
   const pages = splitPages(text);
   for (let p = 0; p < pages.length; p++) {
     const lines = (pages[p] ?? "").split("\n");
     for (let i = 0; i < lines.length; i++) {
-      const hit = matchCaptionLine(lines[i] ?? "", lines[i - 1]);
+      const hit = readCaption(lines, i);
       if (hit) captions.push({ page: p + 1, ...hit });
     }
   }
   return captions;
+}
+
+/** The caption starting at `lines[i]` with its continuation lines joined; null when none. */
+function readCaption(lines: string[], i: number): { label: string; text: string } | null {
+  const line = lines[i] ?? "";
+  const prev = lines[i - 1];
+  const hit = matchCaptionLine(line, prev) ?? matchBareLabel(line, prev);
+  if (!hit) return null;
+
+  let next = i + 1;
+  let block = false;
+  if (hit.text === "") {
+    // "…is shown in\n\nFigure 12-32." — the referring sentence wrapped past a blank line;
+    // the period is the sentence's, so look through the blank for run-on prose.
+    if (/\.\s*$/u.test(line) && runsOnIntoNextLine(previousNonBlank(lines, i))) return null;
+    const following = (lines[next] ?? "").trim();
+    if (following !== "") {
+      // a lowercase line under a label-only head is a wrapped reference ("Figure 2.10\n
+      // shows…") or a diagram's inner label ("sys_socket"), never caption text
+      if (/^[a-zа-яё]/u.test(following)) return null;
+      hit.text = following;
+      block = true;
+      next++;
+    }
+    // blank next line: a label-only Figure (RU "Рис. 7.2" under a diagram) — still a Figure
+  }
+
+  for (let added = 0; added < MAX_CONTINUATION_LINES; added++) {
+    if (hit.text === "" || hit.text.length >= CAPTION_MAX || TERMINAL.test(hit.text)) break;
+    const cont = (lines[next] ?? "").trim();
+    if (cont === "" || matchCaptionLine(cont) || BARE_LABEL.test(cont)) break;
+    if (!block && !CONTINUES.test(cont) && !DANGLING.test(hit.text)) break;
+    hit.text = joinLine(hit.text, cont);
+    next++;
+  }
+  // mark a cut caption instead of ending silently mid-clause
+  if (hit.text.length > CAPTION_MAX) hit.text = `${hit.text.slice(0, CAPTION_MAX - 1)}…`;
+  else if (DANGLING.test(hit.text)) hit.text = `${hit.text}…`;
+  return hit;
+}
+
+/** A line that is only a figure label; the #116 run-on guard applies as for any caption. */
+export function matchBareLabel(line: string, prevLine?: string): { label: string; text: string } | null {
+  if (prevLine !== undefined && runsOnIntoNextLine(prevLine)) return null;
+  const m = BARE_LABEL.exec(line);
+  return m ? { label: m[1] ?? "", text: "" } : null;
+}
+
+function previousNonBlank(lines: string[], i: number): string {
+  for (let k = i - 1; k >= 0; k--) {
+    if ((lines[k] ?? "").trim() !== "") return lines[k] ?? "";
+  }
+  return "";
+}
+
+/** Join a wrapped line: soft hyphens and RU word breaks drop, EN compounds keep their dash. */
+function joinLine(text: string, cont: string): string {
+  if (/[¬\u00ad]$/u.test(text)) return text.slice(0, -1) + cont;
+  if (/[а-яё]-$/u.test(text) && /^[а-яё]/u.test(cont)) return text.slice(0, -1) + cont;
+  if (/[a-z]-$/u.test(text) && /^[a-z]/u.test(cont)) return text + cont;
+  return `${text} ${cont}`;
 }
 
 /**
@@ -84,7 +173,11 @@ export function matchCaptionLine(
   if (prevLine !== undefined && runsOnIntoNextLine(prevLine)) return null;
   for (const re of CAPTION_PATTERNS) {
     const m = re.exec(line);
-    if (m) return { label: m[1] ?? "", text: (m[2] ?? "").trim() };
+    if (!m) continue;
+    const text = (m[2] ?? "").trim().replace(PUA_LEAD, "");
+    if (REFERENCE_TAIL.test(text)) return null;
+    if (re === RU_PATTERN && RU_REFERENCE_TEXT.test(text)) return null;
+    return { label: m[1] ?? "", text };
   }
   return null;
 }

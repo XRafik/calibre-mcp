@@ -26,7 +26,7 @@ describe("buildInventory", () => {
   // page 1: uncaptioned cover; page 2: one caption + one raster; page 3: two rasters, one caption
   const text = [
     "cover page",
-    "prose\nFigure 1-1. The fundamental mental model\nmore prose",
+    "prose\nFigure 1-1. The fundamental mental model\nMore prose.",
     "Figure 1-2: Second figure\ntext",
   ].join("\f");
 

@@ -237,3 +237,37 @@ describe("injectFigureMarkers — inline code and bold-paragraph captions (#101)
     expect(out.markers[0]?.caption).toBe("Figure 2.1 Docker client and engine.");
   });
 });
+
+describe("PDF caption lines (#107)", () => {
+  it("should_anchor_an_identifier_caption_without_reading_underscores_as_emphasis", () => {
+    const text = "\fprose\nFigure 2-9: Relationship between task_struct, thread_info, and the\nkernel stack.\n";
+    const caption = "Relationship between task_struct, thread_info, and the kernel stack.";
+    const out = injectFigureMarkers(text, inv([{ label: "2-9", caption }]), "pdf");
+    expect(out.markers[0]?.charOffset).toBe(text.indexOf("Figure 2-9"));
+  });
+
+  it("should_anchor_a_wrapped_caption_whose_first_line_is_short", () => {
+    const text = "\fprose\nРис. 3.1 \uf076 Отношение,\nсоответствующее представлению SYSAN\n";
+    const caption = "Отношение, соответствующее представлению SYSAN";
+    const out = injectFigureMarkers(text, inv([{ label: "3.1", caption }]), "pdf");
+    expect(out.markers[0]?.charOffset).toBe(text.indexOf("Рис. 3.1"));
+  });
+});
+
+describe("bare-label captions (#107)", () => {
+  it("should_anchor_the_marker_on_a_label_only_line_whose_next_line_is_the_caption", () => {
+    const text = "prose\nFigure 2.10\nUnifying of ALU, Load, Store, and Branch Instruction Types\nmore\n";
+    const out = injectFigureMarkers(
+      text,
+      inv([{ label: "2.10", caption: "Unifying of ALU, Load, Store, and Branch Instruction Types into a Pipeline." }]),
+      "epub",
+    );
+    expect(out.text.indexOf("[image #0")).toBe("prose\n".length);
+  });
+
+  it("should_not_anchor_on_a_label_only_line_followed_by_unrelated_text", () => {
+    const text = "prose\nFigure 12-32.\nsys_socket\nlater\nFigure 12-32: Code flow diagram for sys_socket.\n";
+    const out = injectFigureMarkers(text, inv([{ label: "12-32", caption: "Code flow diagram for sys_socket." }]), "epub");
+    expect(out.markers[0]?.charOffset).toBe(text.indexOf("Figure 12-32:"));
+  });
+});

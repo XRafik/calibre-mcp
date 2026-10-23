@@ -1,8 +1,10 @@
 // Caption-line detection tests — fixture lines lifted from the 2026-07-22 library probe
-// (Software Architecture Metrics, System Programming in Linux, Nikolskiy, Lesovsky).
+// (Software Architecture Metrics, System Programming in Linux, Nikolskiy, Lesovsky) and the
+// #107 real-page quirk fixtures.
 
 import { describe, expect, it } from "vitest";
 import { matchCaptionElement, matchCaptionLine, scanCaptions, splitPages } from "../../../src/domain/figures/captions.js";
+import * as quirks from "./fixtures/caption-quirks-107.js";
 
 describe("matchCaptionLine", () => {
   it("matches O'Reilly dot captions", () => {
@@ -55,7 +57,7 @@ describe("matchCaptionLine", () => {
 
 describe("scanCaptions", () => {
   it("assigns 1-based pages from form-feed breaks, in document order", () => {
-    const text = ["intro page", "prose\nFigure 1-1. First\nmore prose", "Figure 1-2: Second"].join("\f");
+    const text = ["intro page", "prose\nFigure 1-1. First\nMore prose.", "Figure 1-2: Second"].join("\f");
     expect(scanCaptions(text)).toEqual([
       { page: 2, label: "1-1", text: "First" },
       { page: 3, label: "1-2", text: "Second" },
@@ -122,5 +124,51 @@ describe("matchCaptionElement", () => {
 
   it("should reject a block over 300 chars", () => {
     expect(matchCaptionElement(`Figure 1.1 ${"x".repeat(300)}`)).toBeNull();
+  });
+});
+
+describe("caption quirks on real pages (#107)", () => {
+  // Every fixture is a real pdftotext snippet; see fixtures/caption-quirks-107.md.
+  for (const [name, fixture] of Object.entries(quirks)) {
+    it(`should_scan_${name}_like_${fixture.source.replace(/\W+/g, "_")}`, () => {
+      const found = scanCaptions(fixture.page).map(({ label, text }) => ({ label, text }));
+      expect(found).toEqual(fixture.expected);
+    });
+  }
+});
+
+describe("caption continuation (#107)", () => {
+  it("should_stop_joining_at_an_unpunctuated_caption_followed_by_a_capitalized_paragraph", () => {
+    expect(scanCaptions("Figure 1-1. The fundamental mental model\nThe next paragraph starts here.")[0]?.text).toBe(
+      "The fundamental mental model",
+    );
+  });
+
+  it("should_mark_a_caption_cut_on_a_dangling_word_with_an_ellipsis", () => {
+    const page = ["Figure 1-5: Execution in kernel and user mode. The CPU executes", "code in a", "loop and the", "next one and the", "last one."].join("\n");
+    expect(scanCaptions(page)[0]?.text.endsWith("the…")).toBe(true);
+  });
+
+  it("should_join_a_RU_word_break_without_the_hyphen", () => {
+    expect(scanCaptions("Рис. 10.9. Схема редукто-\nров и регионов")[0]?.text).toBe("Схема редукторов и регионов");
+  });
+
+  it("should_keep_an_EN_compound_dash_when_joining", () => {
+    expect(scanCaptions("Figure 3-1: A kernel-\nlevel view of the scheduler.")[0]?.text).toBe("A kernel-level view of the scheduler.");
+  });
+
+  it("should_reject_a_period_ended_label_whose_sentence_ran_on_past_a_blank_line", () => {
+    const page = ["The layout of the virtual address space is indicated by an arrow in", "", "Figure 3-34.", ""].join("\n");
+    expect(scanCaptions(page)).toEqual([]);
+  });
+
+  it("should_strip_a_private_use_separator_glyph", () => {
+    expect(matchCaptionLine("Рис. 1.1 \uf076 Территориально распределенные центры")?.text).toBe(
+      "Территориально распределенные центры",
+    );
+  });
+
+  it("should_reject_caption_text_opening_on_closing_punctuation", () => {
+    expect(matchCaptionLine("рис. 11.10) или, в случае HDFS, может")).toBeNull();
   });
 });

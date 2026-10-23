@@ -4,7 +4,7 @@
 // extraction/caching seam lives in src/calibre/extract.ts.
 
 import { scanPageStarts } from "../page-offsets.js";
-import { matchCaptionElement, matchCaptionLine } from "./captions.js";
+import { matchBareLabel, matchCaptionElement, matchCaptionLine } from "./captions.js";
 import type { FigureEntry, FigureInventory } from "./inventory.js";
 
 /** One placed marker; offsets index into the RETURNED (marker-injected) text. */
@@ -107,13 +107,17 @@ interface CaptionLine {
   text: string;
   /** Caption text after the label (the pattern's text group). */
   captionText: string;
+  /** The physically next line — a wrapped caption's continuation (#107). */
+  nextLine: string;
 }
 
 /** Scan all lines that look like captions, with their start offsets in `text`. */
 function scanCaptionLines(text: string, markdown: boolean): CaptionLine[] {
   const found: CaptionLine[] = [];
   let start = 0;
-  for (const raw of text.split("\n")) {
+  const rawLines = text.split("\n");
+  for (let i = 0; i < rawLines.length; i++) {
+    const raw = rawLines[i] ?? "";
     // ebook-convert markdown dresses captions up (`##### **Figure 1.1** A rendition…`,
     // `*Figure 12.1 – Logical…*`): strip heading/quote prefixes, then turn emphasis
     // spans into a wide gap — `**Figure 1.1** Text` ends the bold right where a real
@@ -123,8 +127,10 @@ function scanCaptionLines(text: string, markdown: boolean): CaptionLine[] {
     // Inline code is literal: `managed_new_default` must not pair `_new_` as emphasis.
     // Escape its markers and drop the backticks (#101).
     if (markdown) stripped = stripped.replace(/`([^`]*)`/g, (_, code: string) => code.replace(/[*_]/g, "\\$&"));
-    stripped = stripped
-      .replace(/(?<!\\)[*_]{1,2}((?:\\[*_]|[^*_])+?)(?<!\\)[*_]{1,2}/g, "$1  ");
+    // Markdown only: in pdftotext output `_` is literal, and pairing it mangled identifier
+    // captions ("task_struct, thread_info" → "taskstruct, thread  info"), leaving 57 of
+    // book 175's figures on the page-boundary fallback (#107).
+    if (markdown) stripped = stripped.replace(/(?<!\\)[*_]{1,2}((?:\\[*_]|[^*_])+?)(?<!\\)[*_]{1,2}/g, "$1  ");
     // Then drop the unpaired leftovers: BPB's italic-wrapped bold label `***Figure 1.1:**
     // Text*` keeps its outer `*` after the pairing pass, and inline code inside a bold
     // caption leaves `****\`Book\`****` debris that pushed long Manning captions past the
@@ -141,7 +147,15 @@ function scanCaptionLines(text: string, markdown: boolean): CaptionLine[] {
     // caption-styled paragraph, not prose — same trust.
     const heading = markdown && (/^\s*#/.test(raw) || /^\s*[*_].*[*_]\s*$/.test(raw));
     const hit = heading ? matchCaptionElement(collapseWs(stripped)) : matchCaptionLine(stripped);
-    if (hit) found.push({ start, label: hit.label, text: stripped, captionText: hit.text });
+    const nextLine = (rawLines[i + 1] ?? "").trim();
+    // label-only head (#107: "Figure 12-2:" or a bare "Figure 2.10"): the caption text is
+    // the next line, so compare that
+    const head = hit ?? matchBareLabel(stripped);
+    if (head && head.text === "") {
+      found.push({ start, label: head.label, text: `${stripped} ${nextLine}`, captionText: nextLine, nextLine: "" });
+    } else if (head) {
+      found.push({ start, label: head.label, text: stripped, captionText: head.text, nextLine });
+    }
     start += raw.length + 1;
   }
   return found;
@@ -163,7 +177,7 @@ function findCaptionLine(lines: CaptionLine[], from: number, entry: FigureEntry)
   for (let i = from; i < lines.length; i++) {
     const line = lines[i]!;
     if (normalizeLabel(line.label) !== normalizeLabel(label)) continue;
-    if (head.length > 0 && !comparable(line.text).includes(head) && !isCaptionPrefix(line.captionText, full)) continue;
+    if (head.length > 0 && !comparable(line.text).includes(head) && !isCaptionPrefix(line, full)) continue;
     return i;
   }
   return -1;
@@ -172,9 +186,15 @@ function findCaptionLine(lines: CaptionLine[], from: number, entry: FigureEntry)
 /** Shortest line caption trusted as a prefix match — shorter is too generic to anchor on. */
 const PREFIX_MIN = 12;
 
-function isCaptionPrefix(lineCaption: string, fullComparable: string): boolean {
-  const c = comparable(lineCaption);
-  return c.length >= PREFIX_MIN && fullComparable.startsWith(c);
+function isCaptionPrefix(line: CaptionLine, fullComparable: string): boolean {
+  const own = comparable(line.captionText);
+  if (own.length >= PREFIX_MIN && fullComparable.startsWith(own)) return true;
+  // The inventory joins wrapped captions (#107), so a first line shorter than the minimum
+  // ("Рис. 3.1  Отношение,") still anchors once its continuation line is counted.
+  // Either side may run longer: the two extractors break lines in different places.
+  const joined = comparable(`${line.captionText} ${line.nextLine}`);
+  if (own.length === 0 || joined.length < PREFIX_MIN || fullComparable.length < PREFIX_MIN) return false;
+  return fullComparable.startsWith(joined) || joined.startsWith(fullComparable);
 }
 
 /**
