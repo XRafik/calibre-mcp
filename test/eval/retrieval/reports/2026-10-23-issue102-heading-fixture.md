@@ -71,7 +71,7 @@ patch in a scratch worktree.
   from rank 2 out of the top 3 in all six rows. That is the demotion working, and
   Hit@1/nDCG don't register it.
 - **Diff across all 204 per-query rows: only these 9 (fmt-04..06 × 3 modes) changed.** The
-  other 59 queries are byte-identical between runs. Overall keyword Hit@1 went 0.746 → 0.797,
+  other 59 queries have identical metrics and top-3 in both runs. Overall keyword Hit@1 went 0.746 → 0.797,
   entirely from 117. Adding 117 to the library-scope corpus broke no existing query and kept
   6/6 negatives flagged.
 
