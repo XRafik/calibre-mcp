@@ -6,6 +6,28 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-10-23
+
+### Added
+
+- **PDF outline (bookmarks) as a chapter-map source (#134).** `calibre_get_content` structure output can now report `detector: "pdf-outline"`; about 78% of sampled PDFs get an outline map, including books whose text never says "Chapter N".
+- **`indexVersion` as citation provenance (#136).** Exposed in `calibre_semantic_search` results and `calibre_ping` (read from the opened index's meta), with a stale-index hint.
+- **`pnpm reindex` (#99).** Book-level parallel re-index with worker threads and a single serialized SQLite writer; about 2.35x faster at N=3 (full library roughly 6-7 h vs 15 h), resumable, and refuses the production index without `--production`. `calibre_build_index` itself stays at N=1.
+- **Label-only PDF figure captions recovered from page layout** (`pdftotext -bbox-layout`): label-only figures drop from 4,196 to 900 library-wide.
+
+### Changed
+
+- **EPUB front matter is demoted in search (#102).** Heading-structured front matter (title page, copyright, praise, TOC as headings) now ranks lower; the eval gate covers it with a new fixture.
+- **RRF fusion weights evaluated (#142).** `VECTOR_RRF_WEIGHT` stays 1.0 (D-021).
+
+### Fixed
+
+- **EPUB figure markers for BPB/Manning caption shapes (#101).** The 14 books that placed 0 figures now place all of them.
+- **Figure captions (#107).** No more empty captions, wrapped captions are joined (with an ellipsis when cut), body-text false positives are rejected, two-line bare labels are recognized; page-boundary fallback markers on book 175 go from 57 to 0.
+- **Concurrency fixes found during #99.** Chunking is async so other workers' Content Server timers no longer fire spuriously; the extract-cache LRU no longer evicts another book's in-flight temp file.
+
+> **Upgrade note:** figure indexes, front-matter flags and chapter maps changed, so cache versions were bumped. Run a re-index (`pnpm reindex` or `calibre_build_index`) to pick up the figure and front-matter fixes in the semantic index.
+
 ## [0.7.6] — 2026-10-21
 
 ### Changed
