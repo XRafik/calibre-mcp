@@ -31,9 +31,9 @@ import type { ContentBlock, ToolDeps, ToolResult } from "./types.js";
 /** Per-half candidate pool the fuser draws from (design: vector top-50 + keyword top-50). */
 const POOL = 50;
 
-// Weighted-RRF per-source weights for hybrid fusion (fusion literature: per-source weight is
-// the impactful knob, more than k). Both 1.0 = plain RRF; no config/env surface — change them
-// ONLY on retrieval-eval evidence (test/eval/retrieval), never by feel.
+// Weighted-RRF per-source weights for hybrid fusion. Both 1.0 = plain RRF; no config/env
+// surface — change them ONLY on retrieval-eval evidence (test/eval/retrieval), never by feel.
+// #142 sweep (1.0–2.0, D-021): RU flat at k=60, EN exact-identifier regresses → 1.0 stays.
 const VECTOR_RRF_WEIGHT = 1.0;
 const KEYWORD_RRF_WEIGHT = 1.0;
 const RRF_WEIGHTS = [VECTOR_RRF_WEIGHT, KEYWORD_RRF_WEIGHT];
