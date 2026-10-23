@@ -23,6 +23,9 @@ updates:
       # TS 7 (native compiler) is a toolchain migration, not a routine bump
       - dependency-name: typescript
         update-types: ["version-update:semver-major"]
+      # typings must match the supported Node runtimes (engines >=22.16), not the latest Node
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
     groups:
       dev-dependencies:
         dependency-type: development
