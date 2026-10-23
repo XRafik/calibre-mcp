@@ -139,7 +139,8 @@ and many books put it after a blank line. Pulling that text in needs layout geom
 
 ## Phase 3 — caption text from page layout (2026-10-23)
 
-Phase 2 left 4,385 label-only Figures (a label with no caption text). The text stream
+Phase 2 left 4,385 label-only Figures across PDF+EPUB. This re-run counts 4,196 over the 823
+PDFs that scanned cleanly (main @ #172, same harness, stderr drained). The text stream
 can't pair them safely: in reading order, the line under `Figure 1.2` is often diagram
 text (`TV 2 consumer`). `pdftotext -bbox-layout` geometry can. `caption-layout.ts` takes
 a line holding only `keyword label` as the anchor and reads, in this order:
