@@ -3,7 +3,7 @@
 // (the tool) or in a worker thread (bulk re-index, #99) — chunking + tokenizing are sync JS,
 // so book-level concurrency on ONE thread can't speed them up.
 
-import { frontMatterEnd } from "../domain/structure/chapters.js";
+import { frontMatterEnd } from "../domain/structure/front-matter.js";
 import type { OutlineEntry } from "../domain/structure/pdf-outline.js";
 import { chunkForEmbeddingAsync, type EmbedChunk } from "./chunk.js";
 import type { Embedder } from "./embedder.js";

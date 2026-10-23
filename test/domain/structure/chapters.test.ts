@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { chapterNumber, detectChapters, frontMatterEnd } from "../../../src/domain/structure/chapters.js";
+import { chapterNumber, detectChapters } from "../../../src/domain/structure/chapters.js";
+import { frontMatterEnd } from "../../../src/domain/structure/front-matter.js";
 
 describe("chapterNumber", () => {
   it("accepts explicit Latin chapter headings", () => {
