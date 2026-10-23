@@ -222,6 +222,8 @@ export interface PerQueryRow {
   /** Negatives: whether the tool signalled "nothing here" (zero results or low confidence). */
   flagged?: boolean;
   maxScore?: number;
+  /** Top cross-encoder sigmoid score when the rerank stage ran (RERANK_FLOOR calibration). */
+  maxRerank?: number;
   /** Whether the cross-encoder rerank stage actually ran for this query (hybrid/vector only). */
   reranked?: boolean;
   retrieved: string[];
@@ -354,6 +356,7 @@ async function runQuery(
   count: number;
   lowConfidence?: boolean;
   maxScore?: number;
+  maxRerank?: number;
   reranked?: boolean;
 }> {
   const r = await semanticSearchTool.handler(
@@ -365,6 +368,7 @@ async function runQuery(
   const count = Number(sc.count ?? 0);
   const lowConfidence = sc.lowConfidence as boolean | undefined;
   const maxScore = sc.maxScore as number | undefined;
+  const maxRerank = sc.maxRerank as number | undefined;
   const reranked = sc.reranked as boolean | undefined;
 
   if (q.target === "figures") {
@@ -382,6 +386,7 @@ async function runQuery(
       count,
       lowConfidence,
       maxScore,
+      maxRerank,
       reranked,
     };
   }
@@ -398,6 +403,7 @@ async function runQuery(
       count,
       lowConfidence,
       maxScore,
+      maxRerank,
       reranked,
     };
   }
@@ -423,6 +429,7 @@ async function runQuery(
     count,
     lowConfidence,
     maxScore,
+    maxRerank,
     reranked,
   };
 }
@@ -501,6 +508,8 @@ export async function runRetrievalEval(opts: HarnessOptions): Promise<EvalReport
         retrieved: out.retrieved,
       };
       if (out.maxScore !== undefined) row.maxScore = round4(out.maxScore);
+      // Rerank confidence per query — RERANK_FLOOR calibration input (#140).
+      if (out.maxRerank !== undefined) row.maxRerank = round4(out.maxRerank);
       if (out.reranked !== undefined) row.reranked = out.reranked;
       if (q.kind === "negative" || q.kind === "figure-negative") {
         row.flagged = out.count === 0 || out.lowConfidence === true;
