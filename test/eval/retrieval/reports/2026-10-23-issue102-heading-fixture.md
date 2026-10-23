@@ -76,3 +76,9 @@ patch in a scratch worktree.
   6/6 negatives flagged.
 
 Timings are meaningless (≈ 50 min per run, load average 50–67 from concurrent sessions).
+
+Provenance note: the runs were measured on the pre-squash #170 branch. `bab0b03` and `021cf6d`
+in the report names and above are pre-rebase SHAs. On main, the gate declaration is
+"eval: declare headingFrontMatter gate before the rule-on run". The base later gained
+#165/#169 (figure-caption fixtures/EPUB marker placement). Those don't touch the text fixtures or
+the front-matter path, so the eval was not re-run.
