@@ -13,7 +13,7 @@ import { resolveNumericId } from "./resolve-id.js";
 import { INSTALL_TRANSFORMERS } from "./remediation.js";
 import { toolError, toolOk } from "./result.js";
 import type { PruneCounts } from "../semantic/store.js";
-import type { ToolDeps } from "./types.js";
+import type { ToolDeps, ToolResult } from "./types.js";
 import { runBookPipeline } from "../semantic/book-pipeline.js";
 
 /** Page size when listing query matches / the whole library (ids only — the response is tiny). */
@@ -38,7 +38,7 @@ export const buildIndexTool = defineTool({
   name: "calibre_build_index",
   title: "Build semantic index",
   description:
-    "Build the semantic index for specific books (required: bookId, ids, or query — full-library indexing is deferred). A query selects ALL matching books (no 100-book cap); large selections run long and may outlive the client timeout — re-run the same call to resume, since up-to-date books are skipped. Extracts, chunks, and embeds each book. Set keywordOnly=true (or when the embedding model is absent, it happens automatically) to build a keyword-only index that powers mode:\"keyword\" search with zero ML dependencies. Re-run after adding books; use force to re-index unchanged ones. Set prune=true to also drop index entries for books that no longer exist in the library (removals/merges leave searchable orphans behind).",
+    'Build the semantic index for specific books (required: bookId, ids, or query — full-library indexing is deferred). A query selects ALL matching books (no 100-book cap); large selections run long and may outlive the client timeout — re-run the same call to resume, since up-to-date books are skipped. Extracts, chunks, and embeds each book. Set keywordOnly=true (or when the embedding model is absent, it happens automatically) to build a keyword-only index that powers mode:"keyword" search with zero ML dependencies. Re-run after adding books; use force to re-index unchanged ones. Set prune=true to also drop index entries for books that no longer exist in the library (removals/merges leave searchable orphans behind).',
   inputSchema: {
     bookId: BookId().optional(),
     ids: jsonArray(BookId()).optional(),
@@ -88,7 +88,8 @@ export const buildIndexTool = defineTool({
   // readOnlyHint:false but NOT write-gated: this writes to the server's own index dir, not the
   // user's library, so the library write gate doesn't apply. localWrite marks that carve-out.
   localWrite: true,
-  handler: async (args, deps) => {
+  handler: async (args, deps, ctx) => {
+    const signal = ctx?.signal;
     if (args.bookId === undefined && !args.ids?.length && !args.query) {
       return toolError("Specify bookId, ids, or query — full-library indexing is deferred.");
     }
@@ -161,8 +162,7 @@ export const buildIndexTool = defineTool({
           semanticReason =
             "embedding model (@huggingface/transformers) unavailable — automatically degraded to a keyword-only index (no vectors).";
           // Must LEAD the text block (test-asserted at index 0) and carry the universal fix (#47).
-          degradeWarning =
-            `Embedding model unavailable — built a KEYWORD-ONLY index instead (mode:"keyword" search works now). ${INSTALL_TRANSFORMERS} After restarting, rebuild with force=true for vector & hybrid semantic search.`;
+          degradeWarning = `Embedding model unavailable — built a KEYWORD-ONLY index instead (mode:"keyword" search works now). ${INSTALL_TRANSFORMERS} After restarting, rebuild with force=true for vector & hybrid semantic search.`;
         }
         // Other warmup errors (e.g. a download hiccup) fall through — the per-book embed
         // attempt below surfaces them as collected failures (char-budget chunking applies).
@@ -192,11 +192,23 @@ export const buildIndexTool = defineTool({
     let totalUnplaced = 0;
     const bookDetails: BookDetail[] = [];
     let settled = 0;
+    ctx?.progress?.(0, `Indexing ${booksRequested} book(s)…`, booksRequested);
     // Book-level pipeline (#99): write-free prepare per book, one serialized writer commits —
     // the same path the threaded bulk re-index uses, so both keep the single-writer invariant.
     const outcomes = await runBookPipeline<PrepareResult>([...targets], BUILD_CONCURRENCY, {
-      prepare: (bookId) =>
-        prepareBook(deps, bookId, { libraryId, library: args.library, force: args.force, keywordOnly, tokenBudgeted }),
+      prepare: async (bookId) => {
+        // Cancelled (client sent notifications/cancelled or went away): queued books never start.
+        // Books already committed stay indexed; the in-flight subprocess is killed by its signal.
+        signal?.throwIfAborted();
+        return prepareBook(deps, bookId, {
+          libraryId,
+          library: args.library,
+          force: args.force,
+          keywordOnly,
+          tokenBudgeted,
+          signal,
+        });
+      },
       commit: (_bookId, prepared) => {
         if (prepared.kind === "ready") commitBook(deps, libraryId, prepared);
       },
@@ -205,15 +217,18 @@ export const buildIndexTool = defineTool({
         if (settled % PROGRESS_EVERY === 0) {
           deps.log.info("build progress", { done: settled, of: booksRequested });
         }
+        if (signal?.aborted) return;
         if (!o.ok) {
           deps.log.warn("book failed", { bookId: o.bookId, stage: o.stage, reason: describeError(o.error) });
         }
+        ctx?.progress?.(settled, `Indexed ${settled}/${booksRequested} book(s)`, booksRequested);
       },
     });
     // Tally in selection order, so the result reads the same whatever order books finished in.
     for (const o of outcomes) {
       if (!o.ok) {
-        failures.push(`book ${o.bookId}: ${describeError(o.error)}`);
+        // A book cut short by the cancel did not fail — it just never finished.
+        if (!signal?.aborted) failures.push(`book ${o.bookId}: ${describeError(o.error)}`);
       } else if (o.prepared.kind === "skipped") {
         booksSkipped++;
       } else {
@@ -224,6 +239,10 @@ export const buildIndexTool = defineTool({
         totalUnplaced += d.unplaced;
         bookDetails.push(d);
       }
+    }
+    if (signal?.aborted) {
+      const done = booksIndexed + booksSkipped;
+      return cancelledResult({ done, booksRequested, booksIndexed, booksSkipped, chunks: totalChunks });
     }
     if (totalUnplaced > 0) {
       // Unplaced markers are silent figure-linkage gaps — say so instead of a clean-looking count.
@@ -277,9 +296,7 @@ export const buildIndexTool = defineTool({
       booksSkipped,
       chunks: totalChunks,
       figures: totalFigures,
-      ...(pruned
-        ? { prunedBooks: pruned.books, prunedChunks: pruned.chunks, prunedFigures: pruned.figures }
-        : {}),
+      ...(pruned ? { prunedBooks: pruned.books, prunedChunks: pruned.chunks, prunedFigures: pruned.figures } : {}),
       elapsedMs,
       keywordOnly,
       semanticAvailable: !keywordOnly,
@@ -289,6 +306,28 @@ export const buildIndexTool = defineTool({
     });
   },
 });
+
+/** isError result for a build the client cancelled — partial counts, and how to resume. */
+function cancelledResult(c: {
+  done: number;
+  booksRequested: number;
+  booksIndexed: number;
+  booksSkipped: number;
+  chunks: number;
+}): ToolResult {
+  return toolError(
+    `Index build cancelled after ${c.done}/${c.booksRequested} book(s) (${c.booksIndexed} indexed, ` +
+      `${c.booksSkipped} up-to-date). Books finished before the cancel stay indexed — re-run the same ` +
+      "call to continue (finished books are skipped).",
+    {
+      booksRequested: c.booksRequested,
+      booksIndexed: c.booksIndexed,
+      booksSkipped: c.booksSkipped,
+      chunks: c.chunks,
+      cancelled: true,
+    },
+  );
+}
 
 /**
  * Every book id matching `query` (empty = the whole library), paged through the search

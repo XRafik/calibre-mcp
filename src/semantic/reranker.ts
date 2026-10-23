@@ -14,6 +14,7 @@ import { InferenceQueue, QUEUE_BUSY } from "./queue.js";
 // multilingual (EN+RU), ~52 BEIR nDCG@10; runs on CPU via transformers.js.
 export const RERANKER_MODEL_ID = "onnx-community/bge-reranker-v2-m3-ONNX";
 /**
+ * @public — documentation constant, intentionally unreferenced.
  * Repo revision this build was verified against (2025-09-01) — documentation, NOT passed to
  * from_pretrained: transformers.js 4.2.0's tokenizer-file existence probe drops the revision
  * (and cache_dir) options, so a revision-pinned cache misses and every offline load fails.
@@ -73,8 +74,7 @@ export class TransformersReranker implements Reranker {
 
   constructor(
     private readonly cfg: Config,
-    private readonly loadTransformers: TransformersLoader = () =>
-      import("@huggingface/transformers"),
+    private readonly loadTransformers: TransformersLoader = () => import("@huggingface/transformers"),
   ) {}
 
   async warmup(): Promise<void> {
@@ -93,12 +93,7 @@ export class TransformersReranker implements Reranker {
     }
   }
 
-  async #score(
-    tokenizer: PairTokenizer,
-    model: SeqClassifier,
-    query: string,
-    passages: string[],
-  ): Promise<number[]> {
+  async #score(tokenizer: PairTokenizer, model: SeqClassifier, query: string, passages: string[]): Promise<number[]> {
     const scores: number[] = [];
     // Solo scoring (D-011 amendment, #98): one pair per forward. Batched padding made a
     // pair's q8 logit depend on which passages shared its batch (0.1–0.6 logit shifts →
@@ -148,9 +143,7 @@ export class TransformersReranker implements Reranker {
     mod.env.cacheDir = path.join(this.cfg.indexDir, "models");
     mod.env.allowRemoteModels = true;
     // No revision option (see RERANKER_REVISION docs) — default "main", like the embedder.
-    const tokenizer = (await mod.AutoTokenizer.from_pretrained(
-      RERANKER_MODEL_ID,
-    )) as unknown as PairTokenizer;
+    const tokenizer = (await mod.AutoTokenizer.from_pretrained(RERANKER_MODEL_ID)) as unknown as PairTokenizer;
     const model = (await mod.AutoModelForSequenceClassification.from_pretrained(RERANKER_MODEL_ID, {
       dtype: "q8",
     })) as unknown as SeqClassifier;

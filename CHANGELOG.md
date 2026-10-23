@@ -4,7 +4,48 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+Releases are cut by release-please from Conventional Commit messages: each release PR
+inserts its generated section above the newest entry. Hand-written notes still go under
+`[Unreleased]`; when merging a release PR, fold them into the generated section and leave
+`[Unreleased]` empty.
+
 ## [Unreleased]
+
+### Added
+
+- **`docs/tool-catalog.json`** — the generated, exact `tools/list` the server advertises
+  (writes enabled; client-compat rewrites applied), so schema changes show up as a reviewable
+  diff. `pnpm catalog` regenerates it; `pnpm catalog:check` fails on drift.
+- **Cancellation.** Cancelling a tool call from the client (MCP `notifications/cancelled`)
+  now stops the work: running `calibredb` / `ebook-convert` / `pdftotext` / figure-scan
+  process groups are killed and downloads are aborted. `calibre_build_index` stops between
+  books and reports what was already indexed (re-running the same call resumes).
+- **Progress notifications.** `calibre_build_index` (per book) and `calibre_quality_report`
+  send MCP progress notifications when the client asks for them (throttled, monotonic).
+
+### Changed
+
+- **Minimum Node.js is now 22.16 (was 22.5).** The semantic index needs `node:sqlite` with
+  FTS5: on 22.5–22.12 `node:sqlite` exists only behind `--experimental-sqlite` (the server
+  failed to start with `ERR_UNKNOWN_BUILTIN_MODULE`), and 22.13–22.15 ship SQLite without
+  FTS5 (index builds failed with `no such module: fts5`). `engines` and the MCPB manifest now
+  say `>=22.16`; Node 22 is tested in CI alongside Node 24.
+- **Releases are automated with release-please.** Merging the release PR tags `vX.Y.Z`,
+  creates the GitHub release and publishes to npm, the GitHub release (`.mcpb`) and the MCP
+  Registry from one workflow.
+- **Tool counts in the docs and manifests are now generated and correct.** The plugin and
+  marketplace descriptions said 17 tools, the skill and `CLAUDE.md` 18; the server advertises
+  19 model-facing tools (18 task tools + `calibre_ping`) plus 2 widget-internal ones. Every
+  stated count is now maintained from the catalog.
+
+### Fixed
+
+- **No orphaned `calibredb` / `ebook-convert` processes after the client disconnects.**
+  Subprocesses run in their own (detached) process group so a timeout can kill the
+  conversion worker too — but that also let them outlive the server when the client
+  closed stdin or sent SIGTERM mid-call, keeping the library write lock. The server now
+  shuts down on stdin EOF/close, SIGINT and SIGTERM, kills every still-running process
+  group first, closes the MCP server and exits 0.
 
 ## [0.8.0] — 2026-10-23
 

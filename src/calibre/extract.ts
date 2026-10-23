@@ -21,8 +21,9 @@ import type { OutlineEntry } from "../domain/structure/pdf-outline.js";
 import { log } from "../logging.js";
 import type { GetInventoryArgs, InventoryResult } from "./figure-inventory.js";
 import { downloadToFile } from "./http.js";
+import { OperationCancelledError } from "../domain/errors.js";
 import { pdftohtmlBinary, readPdfOutline } from "./pdf-outline.js";
-import { spawnCollect, SpawnMaxBufferError, SpawnTimeoutError } from "./spawn.js";
+import { SpawnAbortedError, spawnCollect, SpawnMaxBufferError, SpawnTimeoutError } from "./spawn.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -67,6 +68,8 @@ export interface GetTextArgs {
   cacheKey: string;
   maxBytes?: number;
   timeoutMs?: number;
+  /** Cancellation: aborts the download and kills the converter's process group. */
+  signal?: AbortSignal;
 }
 
 const CACHE_DIR = path.join(tmpdir(), "calibre-mcp-cache");
@@ -189,8 +192,7 @@ export class Extractor {
     const dbDir = path.dirname(this.cfg.calibredbPath);
     const convertName = process.platform === "win32" ? "ebook-convert.exe" : "ebook-convert";
     const ebookConvertPath = dbDir === "." ? "ebook-convert" : path.join(dbDir, convertName);
-    const hasEbookConvert =
-      dbDir === "." ? await binaryExists(ebookConvertPath) : existsSync(ebookConvertPath);
+    const hasEbookConvert = dbDir === "." ? await binaryExists(ebookConvertPath) : existsSync(ebookConvertPath);
 
     const pdftotextPath = resolveBinary(PDFTOTEXT_CANDIDATES, "pdftotext");
     const hasPdftotext = PDFTOTEXT_CANDIDATES.some(existsSync) || (await binaryExists(pdftotextPath));
@@ -259,12 +261,20 @@ export class Extractor {
         // Per-call override wins; otherwise the configured cap (callers like indexBook pass none).
         maxBytes: args.maxBytes ?? this.cfg.maxBookBytes,
         timeoutMs: args.timeoutMs,
+        signal: args.signal,
       });
-      const converted = await this.#convert(fmt, tmpSrc, tmpOut, report, args.timeoutMs);
+      const converted = await this.#convert(fmt, tmpSrc, tmpOut, report, args.timeoutMs, args.signal);
       const { text, markers, unplaced } = await this.#injectMarkers(converted.text, fmt, args);
       // Read while the downloaded PDF still exists; best-effort, [] on any failure.
       const outline = fmt === "pdf" && report.pdftohtmlPath ? await readPdfOutline(report.pdftohtmlPath, tmpSrc) : [];
-      const envelope: TextCacheEnvelope = { v: TEXT_CACHE_VERSION, backend: converted.backend, text, markers, unplaced, outline };
+      const envelope: TextCacheEnvelope = {
+        v: TEXT_CACHE_VERSION,
+        backend: converted.backend,
+        text,
+        markers,
+        unplaced,
+        outline,
+      };
       await writeFile(cacheFile, JSON.stringify(envelope), "utf8");
       await evictCache().catch(() => {});
       return { text, backend: converted.backend, chars: text.length, cached: false, markers, unplaced, outline };
@@ -294,6 +304,7 @@ export class Extractor {
         downloadUrl: args.downloadUrl,
         cacheKey: args.cacheKey,
         timeoutMs: args.timeoutMs,
+        signal: args.signal,
       });
       const marked = injectFigureMarkers(text, inventory, fmt);
       if (marked.unplaced > 0) {
@@ -301,6 +312,8 @@ export class Extractor {
       }
       return { text: marked.text, markers: marked.markers, unplaced: marked.unplaced };
     } catch (err) {
+      // Cancellation is not a figure problem — propagate it instead of degrading to plain text.
+      if (args.signal?.aborted) throw new OperationCancelledError();
       log.warn("figure marker injection skipped", {
         bookId: args.bookId,
         format: fmt,
@@ -316,6 +329,7 @@ export class Extractor {
     out: string,
     report: BackendReport,
     timeoutMs?: number,
+    signal?: AbortSignal,
   ): Promise<{ text: string; backend: string }> {
     const timeout = timeoutMs ?? CONVERT_TIMEOUT_MS;
 
@@ -326,22 +340,22 @@ export class Extractor {
 
     if (fmt === "pdf") {
       if (report.pdf === "pdftotext" && report.pdftotextPath) {
-        await this.#run(report.pdftotextPath, pdftotextArgs(src, out), timeout);
+        await this.#run(report.pdftotextPath, pdftotextArgs(src, out), timeout, signal);
         return { text: await readFile(out, "utf8"), backend: "pdftotext" };
       }
       if (report.pdf === "pymupdf" && report.python3Path) {
-        await this.#run(report.python3Path, [pymupdfScriptPath(), src, out], timeout);
+        await this.#run(report.python3Path, [pymupdfScriptPath(), src, out], timeout, signal);
         return { text: await readFile(out, "utf8"), backend: "pymupdf" };
       }
       if (report.pdf === "ebook-convert" && report.ebookConvertPath) {
-        return await this.#ebookConvert(report.ebookConvertPath, src, out, timeout);
+        return await this.#ebookConvert(report.ebookConvertPath, src, out, timeout, signal);
       }
       throw new Error("NO_PDF_BACKEND");
     }
 
     // EPUB and other ebook formats → Calibre.
     if (report.epub === "ebook-convert" && report.ebookConvertPath) {
-      return await this.#ebookConvert(report.ebookConvertPath, src, out, timeout);
+      return await this.#ebookConvert(report.ebookConvertPath, src, out, timeout, signal);
     }
     throw new Error("NO_EPUB_BACKEND");
   }
@@ -352,14 +366,20 @@ export class Extractor {
    * a float (e.g. `calc(1em / 2)`), which would otherwise drop the whole book from the index for
    * a purely cosmetic reason. A timeout is NOT retried — that would double the time budget.
    */
-  async #ebookConvert(bin: string, src: string, out: string, timeout: number): Promise<{ text: string; backend: string }> {
+  async #ebookConvert(
+    bin: string,
+    src: string,
+    out: string,
+    timeout: number,
+    signal?: AbortSignal,
+  ): Promise<{ text: string; backend: string }> {
     try {
-      await this.#run(bin, ebookConvertArgs(src, out, "markdown"), timeout);
+      await this.#run(bin, ebookConvertArgs(src, out, "markdown"), timeout, signal);
       return { text: await readFile(out, "utf8"), backend: "ebook-convert" };
     } catch (err) {
       if ((err as Error).message !== "EXTRACT_FAILED") throw err;
       log.warn("markdown conversion failed, retrying as plain text", { src: path.basename(src) });
-      await this.#run(bin, ebookConvertArgs(src, out, "plain"), timeout);
+      await this.#run(bin, ebookConvertArgs(src, out, "plain"), timeout, signal);
       return { text: await readFile(out, "utf8"), backend: "ebook-convert:plain" };
     }
   }
@@ -370,17 +390,23 @@ export class Extractor {
    * whose timeout leaks the worker and never settles. Raw errors leak temp paths, so
    * re-throw a coded error.
    */
-  async #run(bin: string, args: string[], timeout: number): Promise<void> {
+  async #run(bin: string, args: string[], timeout: number, signal?: AbortSignal): Promise<void> {
     try {
-      const { code } = await spawnCollect(bin, args, { timeoutMs: timeout, maxBuffer: 8 * 1024 * 1024 });
+      const { code } = await spawnCollect(bin, args, { timeoutMs: timeout, maxBuffer: 8 * 1024 * 1024, signal });
       if (code !== 0) throw new Error(`exit ${code}`);
     } catch (err) {
+      if (err instanceof SpawnAbortedError) throw new OperationCancelledError();
       const timedOut = err instanceof SpawnTimeoutError;
       log.error("extract convert failed", {
         bin: path.basename(bin),
         killed: timedOut,
         code: (err as NodeJS.ErrnoException).code,
-        msg: err instanceof SpawnMaxBufferError ? "maxBuffer" : err instanceof Error ? err.message.slice(0, 300) : String(err),
+        msg:
+          err instanceof SpawnMaxBufferError
+            ? "maxBuffer"
+            : err instanceof Error
+              ? err.message.slice(0, 300)
+              : String(err),
       });
       throw new Error(timedOut ? "EXTRACT_TIMEOUT" : "EXTRACT_FAILED");
     }

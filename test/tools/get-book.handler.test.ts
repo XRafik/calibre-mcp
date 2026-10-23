@@ -29,14 +29,14 @@ function deps(thumb: { data: string; mimeType: string } | null): ToolDeps {
     } as unknown as ToolDeps["content"],
     calibre: {} as ToolDeps["calibre"],
     extractor: {} as ToolDeps["extractor"],
+    figures: {} as ToolDeps["figures"],
     embedder: {} as ToolDeps["embedder"],
     index: {} as ToolDeps["index"],
     log,
   };
 }
 
-const args = (over: Record<string, unknown> = {}) =>
-  z.object(getBookTool.inputSchema).parse({ id: 7, ...over });
+const args = (over: Record<string, unknown> = {}) => z.object(getBookTool.inputSchema).parse({ id: 7, ...over });
 
 describe("calibre_get_book include_cover", () => {
   it("should_coerce_string_false_to_false", () => {
@@ -53,10 +53,7 @@ describe("calibre_get_book include_cover", () => {
   });
 
   it("should_attach_image_block_when_opted_in", async () => {
-    const r = await getBookTool.handler(
-      args({ include_cover: true }),
-      deps({ data: "QUJD", mimeType: "image/jpeg" }),
-    );
+    const r = await getBookTool.handler(args({ include_cover: true }), deps({ data: "QUJD", mimeType: "image/jpeg" }));
     const img = r.content.find((c) => c.type === "image");
     expect(img).toMatchObject({ data: "QUJD", mimeType: "image/jpeg" });
   });
