@@ -61,7 +61,11 @@ function population(r: EvalReport, modes: Mode[]): PerQueryRow[] {
 function falseFlags(rows: PerQueryRow[], floor: number, t: FloorThresholds) {
   const hits = rows.filter((r) => !isNegative(r.kind, t) && r.metrics?.hit1 === 1);
   const bad = hits.filter((r) => flagged(r, floor));
-  return { falseFlagged: bad.length, hit1Positives: hits.length, falseFlagRate: hits.length ? bad.length / hits.length : 0 };
+  return {
+    falseFlagged: bad.length,
+    hit1Positives: hits.length,
+    falseFlagRate: hits.length ? bad.length / hits.length : 0,
+  };
 }
 
 export function scoreFloors(
@@ -86,7 +90,9 @@ export function scoreFloors(
     if (lv) {
       v.live = {
         falseFlagRate: falseFlags(lv, floor, t).falseFlagRate,
-        negativesUnflagged: lv.filter((r) => isNegative(r.kind, t) && !flagged(r, floor)).map((r) => `${r.id}/${r.mode}`),
+        negativesUnflagged: lv
+          .filter((r) => isNegative(r.kind, t) && !flagged(r, floor))
+          .map((r) => `${r.id}/${r.mode}`),
       };
     }
     return v;
@@ -95,7 +101,8 @@ export function scoreFloors(
   // Min falseFlagRate among separating candidates; ties → the larger (more conservative) floor.
   const passing = verdicts.filter((v) => v.separationPass);
   const best = passing.reduce<FloorVerdict | undefined>(
-    (b, v) => (!b || v.falseFlagRate < b.falseFlagRate || (v.falseFlagRate === b.falseFlagRate && v.floor > b.floor) ? v : b),
+    (b, v) =>
+      !b || v.falseFlagRate < b.falseFlagRate || (v.falseFlagRate === b.falseFlagRate && v.floor > b.floor) ? v : b,
     undefined,
   );
   const current = verdicts.find((v) => v.floor === t.currentFloor)!;
