@@ -138,6 +138,28 @@ describe("evaluateGate", () => {
     expect(evaluateGate(report(rows), baseline, armed).pass).toBe(false);
   });
 
+  it("gates the heading front-matter trap per mode; a missing query is a miss", () => {
+    const withHfm: Thresholds = {
+      ...thresholds,
+      headingFrontMatter: { queryIds: ["fmt-04", "fmt-05"], minHit1Queries: { keyword: 1, hybrid: 2 } },
+    };
+    const rows = [...healthyRows(), ...(["hybrid", "vector", "keyword"] as Mode[]).flatMap((m) => [
+      row("fmt-04", m, "front-matter-trap", { scope: "book" }),
+      row("fmt-05", m, "front-matter-trap", { scope: "book" }),
+    ])];
+    expect(evaluateGate(report(rows), baseline, withHfm).pass).toBe(true);
+    // keyword tolerates one miss (min 1 of 2)…
+    const kwMiss = rows.map((r) =>
+      r.id === "fmt-05" && r.mode === "keyword" ? { ...r, metrics: { hit1: 0, recall5: 1, rr: 0.5, ndcg10: 0.6 } } : r,
+    );
+    expect(evaluateGate(report(kwMiss), baseline, withHfm).pass).toBe(true);
+    // …hybrid does not, and a dropped row counts as a miss
+    const hyMissing = rows.filter((r) => !(r.id === "fmt-04" && r.mode === "hybrid"));
+    const res = evaluateGate(report(hyMissing), baseline, withHfm);
+    expect(res.pass).toBe(false);
+    expect(res.checks.find((c) => c.name === "heading front-matter hybrid: Hit@1 queries")?.detail).toContain("missed: fmt-04");
+  });
+
   it("enforces the declared figure query counts", () => {
     const rows = healthyRows().filter((r) => r.id !== "fig-02"); // 1 gated < min 2
     expect(evaluateGate(report(rows), baseline, thresholds).pass).toBe(false);
