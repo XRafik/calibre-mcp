@@ -81,3 +81,58 @@ by "a later same-label line whose text isn't caption-shaped". Not in scope.
 - Books that would change, from this sample: 175, 610, 165, 893, 590, 503, 802, 403, plus caption-text
   changes in 351/730/821/374/45/613. A library-wide before/after sweep (inventory only, no index
   rebuild) produces the full list in Phase 2.
+
+## Phase 2 — shipped rules and library sweep (2026-10-23)
+
+Implemented rules 1–8 above, plus three guards the library sweep forced:
+
+- **Stray label-only heads.** A label-only head is dropped when its label has a real caption
+  elsewhere in the book (a reference or index entry). All label-only heads are dropped on a
+  page carrying 4+ of them: back-of-book figure indexes. Book 1111 *TCP/IP Guide* gained 322
+  phantom figures from its index without this.
+- **Block captions must be self-contained.** Text under a bare label counts only if it is
+  isolated (a blank line or the next caption follows) or is one short sentence. It must also
+  start caption-shaped: no page numbers, index entries (`… 371,385,510`), image ids
+  (`F03MQ02`), admonitions (`ПРИМЕЧАНИЕ`, `NOTE`), lone words, or `Figure N` references.
+  Body prose that follows a label (947: `Figure 2-2` / `Figure 2-3 shows…`) leaves a label-only
+  Figure.
+- **Markers.** Bare and label-only heads anchor on their next line. A wrapped caption's
+  continuation line counts in the prefix match (610: `Рис. 3.1  Отношение,` was 10 chars).
+  `_`/`*` pairing now runs only on markdown text. In pdftotext output it mangled identifier
+  captions (`task_struct, thread_info`), which left **57 of book 175's 355 markers** on the
+  page-boundary fallback; now 0.
+
+### Sweep: every PDF/EPUB in Programming Books (1037 files, read-only, origin/main vs branch)
+
+| | main | branch |
+|---|---|---|
+| captioned figures | 53,481 | 56,878 |
+| label-only figures (no caption text) | 1,469 | 4,385 |
+| books with figures recovered from 0 | — | 66 (Manning, Wrox, Modern Processor Design…) |
+
+415 files changed, all PDF (EPUB inventories are byte-identical). 289 changed caption text
+only: wrapped captions completed, PUA glyphs stripped, `…` marks. **126 renumbered:** 73 gained
+figures, 53 lost references. 3 files could not be scanned (pdfimages timeout on 236 and 916,
+pdftotext failure on 1160), so they are unchanged either way. Marker placement on 175/610/165/45/893/182/1111/947/865:
+0 page-boundary fallbacks, 0 unplaced.
+
+Most new figures are **label-only**. Manning PDFs set the caption text away from the label,
+and many books put it after a blank line. Pulling that text in needs layout geometry
+(`pdftotext -bbox`), not line heuristics, so it's the follow-up. The listing shows these as
+`(label only — no caption text)`. Residual false positives found by sampling: 175 p.823
+`Figure 12-25. tcp_v4_do_rcv…` (reference under a running header) and 380 `4-7`
+(diagram text taken as a block caption).
+
+### Re-index implications
+
+- `INVENTORY_VERSION` 3→4 and `TEXT_CACHE_VERSION` 5→6: cached inventories and marker-injected
+  text rebuild on next use. No index change needed for correctness of `calibre_get_figures`.
+- The semantic index stores figure rows (`fig_index`, caption) and bakes `[image #N …]` markers
+  into chunk text. Of the 773 indexed books, **102 have renumbered PDF figures**. Their indexed
+  figure hits point at the wrong `calibre_get_figures` index until re-indexed (if the index used
+  their PDF). **227 more** changed caption text only. Their indexes stay valid but figure-caption
+  search sees the old, shorter text.
+- Renumbered and indexed (re-index these first):
+  9 16 20 21 23 24 30 38 43 55 74 104 108 110 122 128 134 136 165 175 182 183 184 186 193 194 200 209 216 233 243 251 259 266 278 281 284 289 295 357 358 373 379 380 383 390 396 398 403 439 467 468 473 475 494 503 504 505 525 533 538 541 545 561 564 565 575 590 593 610 612 648 650 672 677 678 683 685 695 696 704 705 729 732 741 754 772 783 792 794 796 800 802 805 823 835 845 860 861 865 866 934
+- The production index was not touched. The 2026-07-27 index predates #116 too, so the pending
+  full re-index (#140) covers all of this.
