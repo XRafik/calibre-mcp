@@ -120,6 +120,13 @@ interface BookCtx {
   inventory: FigureInventory;
 }
 
+/** Caption width in the list rows; longer captions end in `…` so a cut never reads as complete (#107). */
+const LIST_CAPTION_MAX = 100;
+
+function clip(s: string, max: number): string {
+  return s.length <= max ? s : `${s.slice(0, max - 1)}…`;
+}
+
 function listFigures(
   args: { include_uncaptioned: boolean },
   { numericId, fmt, inventory }: BookCtx,
@@ -153,7 +160,7 @@ function listFigures(
     `Book ${numericId} — ${countPart}. Indexes are valid for format=${fmt} only.${alsoHas} ` +
     `Fetch with indexes=[…] (≤${MAX_INDEXES_PER_CALL} per call).`;
   const rows = visible.map((e) => {
-    const cap = e.caption ? e.caption.slice(0, 100) : e.captioned ? "" : "(uncaptioned)";
+    const cap = e.caption ? clip(e.caption, LIST_CAPTION_MAX) : e.captioned ? "(label only — no caption text)" : "(uncaptioned)";
     const label = e.label ? ` ${e.label}` : "";
     return `${e.index} | p.${e.page} | ${e.source}${label} | ${cap}`;
   });

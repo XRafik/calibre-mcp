@@ -79,9 +79,11 @@ const CACHE_DIR = path.join(tmpdir(), "calibre-mcp-cache");
  * from bookmarks until LRU-evicted.
  * v5: EPUB caption matching (#101) places markers in books that had none and cleans
  * marker captions — cached EPUB text would keep the old markers and offsets.
+ * v6: PDF caption scan rework (#107) renumbers figure indexes — cached markers would point
+ * at the wrong figures.
  * Rides in the cache filename AND the JSON envelope.
  */
-const TEXT_CACHE_VERSION = 5;
+const TEXT_CACHE_VERSION = 6;
 const MAX_CACHE_ENTRIES = 50;
 const MAX_CACHE_BYTES = 200 * 1024 * 1024;
 const CONVERT_TIMEOUT_MS = 120_000;

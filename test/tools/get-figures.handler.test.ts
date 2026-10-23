@@ -1,5 +1,6 @@
 // calibre_get_figures list header: names the other figure-capable format (#106) and spells
-// out captioned + uncaptioned = rows when uncaptioned images are shown (#108).
+// out captioned + uncaptioned = rows when uncaptioned images are shown (#108); list rows
+// never cut or blank a caption silently (#107).
 
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
@@ -21,7 +22,7 @@ const inventory: FigureInventory = {
   counts: { figures: 2, uncaptioned: 1, pageRender: 0 },
 };
 
-function deps(formats: string[]): ToolDeps {
+function deps(formats: string[], inv: FigureInventory = inventory): ToolDeps {
   const book: Book = {
     id: 929,
     uuid: "u",
@@ -42,7 +43,7 @@ function deps(formats: string[]): ToolDeps {
     extractor: {} as ToolDeps["extractor"],
     embedder: {} as ToolDeps["embedder"],
     index: {} as ToolDeps["index"],
-    figures: { getInventory: async () => ({ inventory }) } as unknown as ToolDeps["figures"],
+    figures: { getInventory: async () => ({ inventory: inv }) } as unknown as ToolDeps["figures"],
     log,
   };
 }
@@ -76,5 +77,28 @@ describe("calibre_get_figures list header", () => {
   it("should_keep_the_hidden_count_wording_by_default", async () => {
     const r = await getFiguresTool.handler(args(), deps(["epub"]));
     expect(textOf(r)).toContain("Book 929 — 2 figures in epub (1 uncaptioned images hidden");
+  });
+});
+
+describe("calibre_get_figures list rows (#107)", () => {
+  const long = "A".repeat(150);
+  const rows: FigureInventory = {
+    entries: [
+      { index: 0, page: 3, captioned: true, label: "7.2", caption: "", source: "page-render" },
+      { index: 1, page: 4, captioned: true, label: "7.3", caption: long, source: "page-render" },
+    ],
+    pageCount: 10,
+    scanned: false,
+    counts: { figures: 2, uncaptioned: 0, pageRender: 2 },
+  };
+
+  it("should_say_label_only_instead_of_a_blank_caption", async () => {
+    const r = await getFiguresTool.handler(args(), deps(["pdf"], rows));
+    expect(textOf(r)).toContain("0 | p.3 | page-render 7.2 | (label only — no caption text)");
+  });
+
+  it("should_mark_a_clipped_caption_with_an_ellipsis", async () => {
+    const r = await getFiguresTool.handler(args(), deps(["pdf"], rows));
+    expect(textOf(r)).toContain(`1 | p.4 | page-render 7.3 | ${"A".repeat(99)}…`);
   });
 });

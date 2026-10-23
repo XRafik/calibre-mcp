@@ -74,7 +74,8 @@ const CACHE_DIR = path.join(tmpdir(), "calibre-mcp-cache");
 /** Bump when FigureEntry/matching semantics change — stale JSON must not survive. */
 // v2: EPUB entries (spineHref/imageHref, svg-render source)
 // v3: caption context guard — wrapped in-text references no longer become figures (#116)
-const INVENTORY_VERSION = 3;
+// v4: multi-line + bare-label captions, reference-tail rejects (#107) — indexes renumber
+const INVENTORY_VERSION = 4;
 const RUN_TIMEOUT_MS = 120_000;
 const MAX_LIST_BUFFER = 8 * 1024 * 1024;
 

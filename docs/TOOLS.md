@@ -128,7 +128,10 @@ See a book's **figures** — the images its text refers to, identified by an adj
 (`Figure 1-2. …`, `Рис. 3.1. …`). Call it without `indexes` to **list** figures (page, caption,
 source) so you can judge relevance before spending image tokens; then pass `indexes` to fetch
 up to 3 of them as actual images in the chat. Raw uncaptioned images (covers, decorations,
-inline equation art) are hidden unless `include_uncaptioned: true`.
+inline equation art) are hidden unless `include_uncaptioned: true`. Captions that wrap
+across lines are read whole; a figure printed with just its number (`Рис. 7.2` under a
+diagram) is listed as *label only*, and a caption cut for length ends in `…`. Indexes count
+hidden uncaptioned images too, so the default list can skip numbers.
 
 In MCP Apps hosts (Claude Desktop), a fetch also renders the figures **for you** in an in-chat
 viewer — a large reading pane with a margin rail when several figures come back, click (or
