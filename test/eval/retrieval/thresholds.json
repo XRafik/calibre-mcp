@@ -77,5 +77,36 @@
       "modes": ["hybrid"]
     },
     "selection": "Among weights passing ALL gates pick the max liveOn RU-involved nDCG@10; ties -> the smaller weight (least departure from plain RRF). No passing weight != 1.0 -> '1.0 stays'. If RU gates pass only at weights that fail EN gates -> report the need for query-adaptive weighting and STOP (non-goal to build it)."
+  },
+  "rerankFloor": {
+    "$comment": "RERANK_FLOOR recalibration gates, declared + committed BEFORE any measurement (D-012 protocol). Known at declaration time (only the #140 headline, PR #168): with the reranker ON, ~18/38 positive library-scope e5 queries hit@1 with maxRerank < 0.3 (as low as 0.0003) and fixture negatives scored <= 0.001. Floors are scored OFFLINE from one fixture run + one live run at the shipped code (per-row maxRerank + maxScore recorded by the harness), so every candidate sees identical rankings. Consumed by test/eval/retrieval/rerank-floor.ts.",
+    "candidates": [0.3, 0.1, 0.03, 0.01, 0.005, 0.003],
+    "currentFloor": 0.3,
+    "flagRule": "flagged(F) = maxScore < semanticFloor (0.78; library/book rows only — figures have no cosine floor) OR maxRerank < F. Mirrors confidence()/figuresConfidence() in calibre_semantic_search.ts. Rows without maxRerank (reranker did not run) are excluded.",
+    "population": {
+      "fixture": {
+        "modes": ["hybrid", "vector"],
+        "rerank": "on"
+      },
+      "live": {
+        "modes": ["hybrid", "vector"],
+        "rerank": "on",
+        "gate": false
+      }
+    },
+    "negativeSeparation": {
+      "$comment": "HARD, fixture. Every negative + figure-negative row must be flagged by the RERANK signal alone (not leaning on the cosine floor, which figures do not have) with a log-scale margin: maxRerank <= F * marginFactor.",
+      "kinds": ["negative", "figure-negative"],
+      "marginFactor": 0.5
+    },
+    "zeroBroken": {
+      "$comment": "HARD. `pnpm eval --gate` (thresholds.nonRegression vs baselineReport, incl. negativesFlagged 6/6 hybrid+vector) must stay green on a confirmatory fixture run with the chosen floor in reranker.ts.",
+      "reusesGate": "nonRegression"
+    },
+    "objective": {
+      "$comment": "falseFlagRate(F) = flagged positive rows with Hit@1 = 1 / all positive rows with Hit@1 = 1 (fixture population; every non-negative kind, all scopes). Lower is better.",
+      "metric": "falseFlagRate"
+    },
+    "selection": "Among candidates passing negativeSeparation pick the min fixture falseFlagRate; ties -> the larger F (more conservative). Adopt only if it lowers falseFlagRate by >= 0.15 absolute vs currentFloor AND zeroBroken passes; otherwise '0.3 stays'. Live is triage only (unverified labels): report live negatives with maxRerank >= the chosen F and the live falseFlagRate, never block on them. Also report whether ANY floor separates cleanly (min Hit@1-positive maxRerank > max negative maxRerank)."
   }
 }
