@@ -5,6 +5,8 @@
 import { describe, expect, it } from "vitest";
 import type { Reranker } from "../../../src/semantic/reranker.js";
 import type { IndexStore } from "../../../src/semantic/store.js";
+import { detectChapters } from "../../../src/domain/structure/chapters.js";
+import { frontMatterEnd, leadingFrontMatter } from "../../../src/domain/structure/front-matter.js";
 import { hashEmbedder } from "./hash-embedder.js";
 import { loadCorpus, loadQueries, runRetrievalEval } from "./harness.js";
 
@@ -81,14 +83,29 @@ describe("retrieval eval harness (model-free smoke)", () => {
     }
   });
 
+  it("heading-structured fixtures exercise the #102 rule, not D-016's chapter detector", () => {
+    // Guards the fixture's purpose: if an edit lets D-016 find the boundary on its own (or
+    // pushes it past the cap), the eval goes blind to leadingFrontMatter again.
+    const { corpus, texts } = loadCorpus();
+    const heading = corpus.books.filter((b) => b.headingStructured === true);
+    expect(heading.length).toBeGreaterThan(0);
+    for (const b of heading) {
+      const text = texts.get(b.bookId)!;
+      const lead = leadingFrontMatter(text);
+      expect(lead.end).toBeGreaterThan(0);
+      expect(detectChapters(text).chapters[0]?.startChar ?? 0).toBe(0);
+      expect(frontMatterEnd(text)).toBe(lead.end);
+    }
+  });
+
   it("runs the full golden set end-to-end and produces a complete report", async () => {
     const report = await runRetrievalEval({ ...base, modes: ["keyword"] });
-    expect(report.meta.queryCount).toBe(65);
-    expect(report.meta.corpus.books).toBe(16);
-    expect(report.overall.keyword?.n).toBe(56); // 65 minus 6 negatives minus 3 figure-negatives
+    expect(report.meta.queryCount).toBe(68);
+    expect(report.meta.corpus.books).toBe(17);
+    expect(report.overall.keyword?.n).toBe(59); // 68 minus 6 negatives minus 3 figure-negatives
     expect(report.negatives.keyword?.n).toBe(6);
     expect(report.figureNegatives.keyword?.n).toBe(3);
-    expect(report.perQuery).toHaveLength(65);
+    expect(report.perQuery).toHaveLength(68);
     // figure-caption rows really ran through target=figures and retrieved figure keys
     const fig = report.perQuery.find((r) => r.id === "fig-01");
     expect(fig?.target).toBe("figures");

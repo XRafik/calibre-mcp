@@ -85,6 +85,8 @@ export interface CorpusBook {
   authors: string[];
   language: string;
   codeHeavy?: boolean;
+  /** EPUB→Markdown-shaped (`#` headings): exercises the heading front-matter rule (#102). */
+  headingStructured?: boolean;
   /** Synthetic figure inventory (relative to corpus/) — fed through the REAL marker-injection path. */
   figures?: string;
 }

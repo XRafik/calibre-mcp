@@ -24,6 +24,11 @@ export interface Thresholds {
     flaggedRate: number;
     positivesZeroedByFloor: number;
   };
+  /** #102 heading front-matter trap queries (fixture 117): per-mode min Hit@1 count. */
+  headingFrontMatter?: {
+    queryIds: string[];
+    minHit1Queries: Partial<Record<Mode, number>>;
+  };
 }
 
 export interface GateCheck {
@@ -143,6 +148,25 @@ export function evaluateGate(current: EvalReport, baseline: EvalReport, t: Thres
     pass: flaggedRate >= t.figureNegative.flaggedRate,
     detail: `flagged ${flaggedRate.toFixed(2)} (need ${t.figureNegative.flaggedRate})`,
   });
+
+  // 4. heading front-matter trap (#102): new queries the baseline predates, so the
+  //    non-regression diff above can't see them. Missing rows count as misses.
+  const hfm = t.headingFrontMatter;
+  if (hfm) {
+    for (const mode of MODES) {
+      const min = hfm.minHit1Queries[mode];
+      if (min === undefined) continue;
+      const byId = new Map(rowsOf(current, mode).map((r) => [r.id, r]));
+      const missed = hfm.queryIds.filter((id) => byId.get(id)?.metrics?.hit1 !== 1);
+      const hits = hfm.queryIds.length - missed.length;
+      checks.push({
+        name: `heading front-matter ${mode}: Hit@1 queries`,
+        active: true,
+        pass: hits >= min,
+        detail: `${hits}/${hfm.queryIds.length} (need ${min})${missed.length ? `; missed: ${missed.join(", ")}` : ""}`,
+      });
+    }
+  }
 
   return { pass: checks.every((c) => !c.active || c.pass), checks, drops };
 }
