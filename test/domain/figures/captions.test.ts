@@ -193,6 +193,21 @@ describe("stray label-only heads (#107)", () => {
 });
 
 describe("block captions under a bare label (#107)", () => {
+  it.each([
+    ["a page number", "23"],
+    ["a back-of-book index entry", "Ручное тестирование 371,385,510"],
+    ["an image id", "F03MQ02"],
+    ["a sidebar admonition", "ПРИМЕЧАНИЕ Метод Object.getOwnPropertyDescriptor() работает"],
+    ["a lone word", "Models”)"],
+  ])("should_not_take_%s_as_caption_text", (_kind, line) => {
+    expect(scanCaptions(["Figure 2.3", line, ""].join("\n"))[0]?.text).toBe("");
+  });
+
+  it("should_not_join_prose_after_a_short_title_line", () => {
+    const page = ["Figure 8-1", "The methods of Map", "If our application needs a Map of Sensors, you might find them here", "Map<String, Sensor> sensors;"].join("\n");
+    expect(scanCaptions(page)[0]?.text).toBe("");
+  });
+
   it("should_keep_label_only_when_body_prose_follows_the_label", () => {
     // book 947 p.71: the label sits under the diagram, the paragraph resumes right after
     const page = ["Vice President", "", "Figure 2-3", "You can even think of the information in this book as a tree", "paragraphs and sections; sections contain paragraphs", "which contain words, which contain characters.)", "More text follows here."].join("\n");

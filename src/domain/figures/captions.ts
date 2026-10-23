@@ -142,20 +142,27 @@ function readCaption(lines: string[], i: number): { label: string; text: string 
       // a lowercase line under a label-only head is a wrapped reference ("Figure 2.10\n
       // shows…") or a diagram's inner label ("sys_socket"), never caption text
       if (/^[a-zа-яё]/u.test(following)) return null;
-      hit.text = following;
-      block = true;
-      next++;
+      if (looksLikeBlockCaption(following)) {
+        hit.text = following;
+        block = true;
+        next++;
+      }
     }
     // blank next line: a label-only Figure (RU "Рис. 7.2" under a diagram) — still a Figure
   }
 
   let joined = 0;
+  let lastLen = hit.text.length; // physical length of the line joined last
   for (; joined < MAX_CONTINUATION_LINES; joined++) {
     if (hit.text === "" || hit.text.length >= CAPTION_MAX || TERMINAL.test(hit.text)) break;
     const cont = (lines[next] ?? "").trim();
     if (endsBlock(cont)) break;
-    if (!block && !CONTINUES.test(cont) && !DANGLING.test(hit.text)) break;
+    // Title Case block captions continue on a capitalized line only after a full-width
+    // line; a short one ("The methods of Map") followed by a sentence is a heading + prose
+    const wrapped = block && lastLen >= BLOCK_WRAP_MIN;
+    if (!wrapped && !CONTINUES.test(cont) && !DANGLING.test(hit.text)) break;
     hit.text = joinLine(hit.text, cont);
+    lastLen = cont.length;
     next++;
   }
   // A block caption is a short self-contained run under its label. Body prose that
@@ -173,6 +180,25 @@ function readCaption(lines: string[], i: number): { label: string; text: string 
 }
 
 const FIGURE_WORD = /^(?:Figure|FIGURE|Fig\.|Рис)/u;
+/** Shortest line that reads as wrapped at the column edge rather than ending a title. */
+const BLOCK_WRAP_MIN = 30;
+// What sits under a bare label besides its caption (sweep of 1037 books): page numbers and
+// back-of-book index entries ("Ручное тестирование 371,385,510"), image ids ("F03MQ02"),
+// sidebar admonitions ("ПРИМЕЧАНИЕ Метод…"), footnote links, lone words.
+// Starts: "Network…", "IDA Pro…", "P6 Microarchitecture…", "(a) A Four-Stage…"
+const CAPTION_START = /^(?:[A-ZА-ЯЁ][a-zа-яё]|[A-ZА-ЯЁ]+\d*[\s/-]|\([a-zа-я]\)\s)/u;
+const ADMONITION = /^(?:NOTE|TIP|WARNING|CAUTION|IMPORTANT|ПРИМЕЧАНИЕ|СОВЕТ|ВНИМАНИЕ|ПРЕДУПРЕЖДЕНИЕ)(?=\s|$)/u;
+const PAGE_LIST_TAIL = /\s\d[\d,\s–-]*$/u;
+
+/** True when the line under a bare label reads as caption text, not page furniture. */
+function looksLikeBlockCaption(line: string): boolean {
+  return (
+    CAPTION_START.test(line) &&
+    !ADMONITION.test(line) &&
+    !PAGE_LIST_TAIL.test(line) &&
+    line.split(/[\s-]+/u).filter((w) => /\p{L}/u.test(w)).length >= 2
+  );
+}
 
 /** A blank line or the next caption ends a caption's run of lines. */
 function endsBlock(line: string): boolean {
