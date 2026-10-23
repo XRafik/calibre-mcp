@@ -121,13 +121,42 @@ function budgetEnd(
  * re-slice via calibre_get_content). Whitespace-only tail chunks are dropped.
  */
 export function chunkForEmbedding(text: string, opts: ChunkForEmbeddingOptions = {}): EmbedChunk[] {
+  return [...chunkSteps(text, opts)];
+}
+
+/** Max time the async chunker holds the event loop before yielding (ms). */
+const YIELD_EVERY_MS = 20;
+
+/**
+ * Same chunks as `chunkForEmbedding`, but yields to the event loop every ~20 ms. A real
+ * tokenizer makes chunking a 20-40 s synchronous loop on a big book; during a concurrent
+ * build (#99) that froze every other book's I/O, and their 10 s request timers then fired
+ * on responses that had already arrived — spurious "Content Server request timed out".
+ */
+export async function chunkForEmbeddingAsync(
+  text: string,
+  opts: ChunkForEmbeddingOptions = {},
+): Promise<EmbedChunk[]> {
+  const chunks: EmbedChunk[] = [];
+  let slice = Date.now();
+  for (const c of chunkSteps(text, opts)) {
+    chunks.push(c);
+    if (Date.now() - slice >= YIELD_EVERY_MS) {
+      await new Promise<void>((r) => setImmediate(r));
+      slice = Date.now();
+    }
+  }
+  return chunks;
+}
+
+/** The chunking loop, one chunk per step — shared by the sync and yielding entry points. */
+function* chunkSteps(text: string, opts: ChunkForEmbeddingOptions): Generator<EmbedChunk> {
   const budget = Math.max(1, Math.trunc(opts.budget ?? DEFAULT_BUDGET));
   const overlap = Math.max(0, Math.min(Math.trunc(opts.overlap ?? DEFAULT_OVERLAP), budget - 1));
   const len = opts.lengthFn ?? ((s: string) => s.length);
   const total = text.length;
-  if (total === 0) return [];
+  if (total === 0) return;
 
-  const chunks: EmbedChunk[] = [];
   let start = 0;
   // Chars-per-unit calibration for the probe, refined chunk over chunk (1 = char default).
   let charsPerUnit = 1;
@@ -146,13 +175,11 @@ export function chunkForEmbedding(text: string, opts: ChunkForEmbeddingOptions =
     const end = reachesEnd ? total : findBreak(text, floor, hardEnd);
 
     const body = text.slice(start, end);
-    if (body.trim().length > 0) chunks.push({ body, charStart: start, charEnd: end });
+    if (body.trim().length > 0) yield { body, charStart: start, charEnd: end };
 
     if (end >= total) break;
     // Advance with overlap, but always make forward progress.
     const next = end - overlap;
     start = next > start ? next : end;
   }
-
-  return chunks;
 }

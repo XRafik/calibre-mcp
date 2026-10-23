@@ -5,11 +5,12 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { loadConfig } from "../../src/config.js";
 import type { Config } from "../../src/config.js";
 import type { Embedder, EmbedderLoadState } from "../../src/semantic/embedder.js";
-import { EMBED_DIM, MODEL_ID } from "../../src/semantic/model.js";
+import { EMBED_DIM, INDEX_VERSION, MODEL_ID } from "../../src/semantic/model.js";
 import { SqliteIndexStore } from "../../src/semantic/store.js";
 import { l2normalize } from "../../src/semantic/vector.js";
 import { computeSemanticStatus, formatSemanticStatusLine } from "../../src/semantic/status.js";
@@ -113,7 +114,7 @@ describe("computeSemanticStatus", () => {
     expect(s.chunkCount).toBe(3);
     expect(s.figureCount).toBe(0);
     expect(formatSemanticStatusLine(s)).toBe(
-      "Semantic search: UNAVAILABLE — model multilingual-e5-small NOT LOADED (@huggingface/transformers not installed — install it, then restart the server); index: 1 books / 3 chunks / 0 figures, 3 vectors (keyword search still works).",
+      "Semantic search: UNAVAILABLE — model multilingual-e5-small NOT LOADED (@huggingface/transformers not installed — install it, then restart the server); index v3: 1 books / 3 chunks / 0 figures, 3 vectors (keyword search still works).",
     );
   });
 
@@ -130,7 +131,7 @@ describe("computeSemanticStatus", () => {
     expect(s.vectorCount).toBe(3);
     expect(s.reason).toBeUndefined();
     expect(formatSemanticStatusLine(s)).toBe(
-      "Semantic search: ready (multilingual-e5-small, 384-dim); index: 1 books / 3 chunks / 0 figures, 3 vectors.",
+      "Semantic search: ready (multilingual-e5-small, 384-dim); index v3: 1 books / 3 chunks / 0 figures, 3 vectors.",
     );
   });
 
@@ -170,7 +171,12 @@ describe("computeSemanticStatus", () => {
     expect(s.available).toBe(true);
     expect(s.indexedBooks).toBeUndefined();
     expect(s.vectorCount).toBeUndefined();
-    expect(formatSemanticStatusLine(s)).toBe("Semantic search: ready (multilingual-e5-small, 384-dim).");
+    expect(s.indexPresent).toBe(false);
+    expect(s.indexVersion).toBeUndefined();
+    expect(s.serverIndexVersion).toBe(INDEX_VERSION);
+    expect(formatSemanticStatusLine(s)).toBe(
+      "Semantic search: ready (multilingual-e5-small, 384-dim); no index yet — run calibre_build_index.",
+    );
   });
 
   it("no libraryId (server unreachable) → counts omitted, dep diagnosis still stands", () => {
@@ -205,5 +211,55 @@ describe("computeSemanticStatus", () => {
     mkdirSync(path.join(dir, "models", MODEL_ID), { recursive: true });
     const warm = computeSemanticStatus({ config: cfg, embedder: embedder(), index: memoryStore() }, undefined, depDir(true));
     expect(warm.modelCached).toBe(true);
+  });
+});
+
+describe("computeSemanticStatus — index provenance (#136)", () => {
+  /** A file-backed index with one book, optionally with its persisted meta tampered. */
+  function fileStore(tamper?: Record<string, string>): { dir: string; store: SqliteIndexStore } {
+    const dir = mkdtempSync(path.join(tmpdir(), "calibre-prov-"));
+    tmpDirs.push(dir);
+    const cfg = loadConfig({ CALIBRE_MCP_INDEX_DIR: dir } as NodeJS.ProcessEnv);
+    const a = new SqliteIndexStore(cfg);
+    a.replaceBook(LIB, { bookId: 1, title: "Rust", authors: [] }, [{ body: "x", charStart: 0, charEnd: 1 }]);
+    a.close();
+    if (tamper) {
+      const db = new DatabaseSync(path.join(dir, `${LIB}.sqlite`));
+      for (const [k, v] of Object.entries(tamper)) db.prepare("UPDATE meta SET value = ? WHERE key = ?").run(v, k);
+      db.close();
+    }
+    return { dir, store: new SqliteIndexStore(cfg) };
+  }
+
+  it("reports indexVersion/model/dim read from the index meta", () => {
+    const { store } = fileStore();
+    const s = computeSemanticStatus({ config: memCfg, embedder: embedder("loaded"), index: store }, LIB, depDir(true));
+    expect(s).toMatchObject({ indexVersion: INDEX_VERSION, serverIndexVersion: INDEX_VERSION, model: MODEL_ID, dim: EMBED_DIM });
+    expect(s.indexStale).toBeUndefined();
+    expect(s.available).toBe(true);
+    store.close();
+  });
+
+  it("an index from an older generation is flagged stale with a rebuild hint — no throw", () => {
+    const { store } = fileStore({ index_version: "2" });
+    const s = computeSemanticStatus({ config: memCfg, embedder: embedder("loaded"), index: store }, LIB, depDir(true));
+    expect(s.indexVersion).toBe(2);
+    expect(s.indexStale).toBe(true);
+    expect(s.available).toBe(false);
+    expect(s.indexedBooks).toBeUndefined(); // counting would hit the INDEX_INCOMPATIBLE guard
+    expect(s.reason).toMatch(/indexVersion 2 \(server: \d+\).*force=true/);
+    const line = formatSemanticStatusLine(s);
+    expect(line).toContain("index STALE");
+    expect(line).toContain(`index v2; this server builds multilingual-e5-small 384-dim, index v${INDEX_VERSION}`);
+    expect(line).toContain("calibre_build_index force=true");
+    store.close();
+  });
+
+  it("an index built by another model reports THAT model (meta is the honest source)", () => {
+    const { store } = fileStore({ model_id: "intfloat/other-model", dim: "768" });
+    const s = computeSemanticStatus({ config: memCfg, embedder: embedder("loaded"), index: store }, LIB, depDir(true));
+    expect(s).toMatchObject({ model: "intfloat/other-model", dim: 768, indexStale: true });
+    expect(formatSemanticStatusLine(s)).toContain("built with other-model 768-dim");
+    store.close();
   });
 });

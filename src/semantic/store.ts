@@ -126,9 +126,27 @@ export interface PruneCounts {
   figures: number;
 }
 
+/**
+ * What built an index, as persisted in its `meta` table (#136) — the citation provenance:
+ * stored char offsets / figure pages are valid only within one `indexVersion`.
+ */
+export interface IndexMeta {
+  modelId: string;
+  dim: number;
+  indexVersion: number;
+  /** ISO timestamp the index db was first created; absent on hand-built/legacy metas. */
+  createdAt?: string;
+}
+
 export interface IndexStore {
   /** Cheap, side-effect-free check for an existing index (no db file is created). */
   hasIndex(libraryId: string): boolean;
+  /**
+   * The index's persisted meta, read WITHOUT the compatibility guard — so a stale index
+   * (built by another model/INDEX_VERSION) can still be described. Undefined when there is
+   * no index or its meta is unreadable. Never creates a db file.
+   */
+  indexMeta(libraryId: string): IndexMeta | undefined;
   /** True if the index holds any embedding vectors (false = a keyword-only build). */
   hasVectors(libraryId: string): boolean;
   /** True if the book is indexed; when `lastModified` is given, also that it's up to date. */
@@ -312,6 +330,31 @@ export class SqliteIndexStore implements IndexStore {
     if (this.#dbs.has(libraryId)) return true;
     if (this.cfg.indexDir === ":memory:") return false;
     return existsSync(this.#file(libraryId));
+  }
+
+  indexMeta(libraryId: string): IndexMeta | undefined {
+    if (!this.hasIndex(libraryId)) return undefined;
+    // An already-open db passed #ensureMeta; otherwise peek read-only so a stale index is
+    // described instead of refused (and nothing is migrated or written).
+    const open = this.#dbs.get(libraryId);
+    let db: DatabaseSync | undefined;
+    try {
+      db = open ?? new DatabaseSync(this.#file(libraryId), { readOnly: true });
+      const kv = new Map<string, string>();
+      for (const r of db.prepare("SELECT key, value FROM meta").all() as Row[]) {
+        kv.set(String(r.key), String(r.value));
+      }
+      const indexVersion = Number(kv.get("index_version"));
+      const dim = Number(kv.get("dim"));
+      const modelId = kv.get("model_id");
+      if (!modelId || !Number.isInteger(indexVersion) || !Number.isInteger(dim)) return undefined;
+      const createdAt = kv.get("created_at");
+      return { modelId, dim, indexVersion, ...(createdAt ? { createdAt } : {}) };
+    } catch {
+      return undefined; // no meta table / not a sqlite file — "no index" for provenance purposes
+    } finally {
+      if (!open) db?.close();
+    }
   }
 
   hasVectors(libraryId: string): boolean {
