@@ -69,9 +69,11 @@ const CACHE_DIR = path.join(tmpdir(), "calibre-mcp-cache");
  * every char offset, so pre-marker `.txt` cache entries must never be served again
  * (they become LRU-evicted orphans). v3: the PyMuPDF backend now separates pages with
  * `\f` like pdftotext (#133) — cached `\n`-joined PyMuPDF text would hide page breaks.
+ * v4: EPUB caption matching (#101) places markers in books that had none and cleans
+ * marker captions — cached EPUB text would keep the old markers and offsets.
  * Rides in the cache filename AND the JSON envelope.
  */
-const TEXT_CACHE_VERSION = 3;
+const TEXT_CACHE_VERSION = 4;
 const MAX_CACHE_ENTRIES = 50;
 const MAX_CACHE_BYTES = 200 * 1024 * 1024;
 const CONVERT_TIMEOUT_MS = 120_000;

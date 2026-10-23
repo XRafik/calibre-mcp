@@ -4,7 +4,7 @@
 // extraction/caching seam lives in src/calibre/extract.ts.
 
 import { scanPageStarts } from "../page-offsets.js";
-import { matchCaptionLine } from "./captions.js";
+import { matchCaptionElement, matchCaptionLine } from "./captions.js";
 import type { FigureEntry, FigureInventory } from "./inventory.js";
 
 /** One placed marker; offsets index into the RETURNED (marker-injected) text. */
@@ -45,7 +45,9 @@ export function injectFigureMarkers(text: string, inventory: FigureInventory, fo
   const captioned = inventory.entries.filter((e) => e.captioned);
   if (captioned.length === 0) return { text, markers: [], unplaced: 0 };
 
-  const lines = scanCaptionLines(text);
+  // pdftotext output is plain text (a `*`/`_` there is literal); everything else came
+  // through ebook-convert's markdown writer
+  const lines = scanCaptionLines(text, format !== "pdf");
   const pageStarts = format === "pdf" ? scanPageStarts(text) : [];
 
   // Order-preserving greedy match: each caption line anchors at most one figure, so a
@@ -103,10 +105,12 @@ interface CaptionLine {
   start: number;
   label: string;
   text: string;
+  /** Caption text after the label (the pattern's text group). */
+  captionText: string;
 }
 
 /** Scan all lines that look like captions, with their start offsets in `text`. */
-function scanCaptionLines(text: string): CaptionLine[] {
+function scanCaptionLines(text: string, markdown: boolean): CaptionLine[] {
   const found: CaptionLine[] = [];
   let start = 0;
   for (const raw of text.split("\n")) {
@@ -114,12 +118,30 @@ function scanCaptionLines(text: string): CaptionLine[] {
     // `*Figure 12.1 – Logical…*`): strip heading/quote prefixes, then turn emphasis
     // spans into a wide gap — `**Figure 1.1** Text` ends the bold right where a real
     // separator would sit, so the gap makes the Manning caption pattern match it.
-    const stripped = raw
-      .replace(/^[\s>#]+/, "")
-      .replace(/[*_]{1,2}([^*_]+)[*_]{1,2}/g, "$1  ")
-      .replace(/\s+$/, "");
-    const hit = matchCaptionLine(stripped);
-    if (hit) found.push({ start, label: hit.label, text: stripped });
+    // Escaped `\_`/`\*` are literal text (`add\_one`), never an emphasis edge.
+    let stripped = raw.replace(/^[\s>#]+/, "");
+    // Inline code is literal: `managed_new_default` must not pair `_new_` as emphasis.
+    // Escape its markers and drop the backticks (#101).
+    if (markdown) stripped = stripped.replace(/`([^`]*)`/g, (_, code: string) => code.replace(/[*_]/g, "\\$&"));
+    stripped = stripped
+      .replace(/(?<!\\)[*_]{1,2}((?:\\[*_]|[^*_])+?)(?<!\\)[*_]{1,2}/g, "$1  ");
+    // Then drop the unpaired leftovers: BPB's italic-wrapped bold label `***Figure 1.1:**
+    // Text*` keeps its outer `*` after the pairing pass, and inline code inside a bold
+    // caption leaves `****\`Book\`****` debris that pushed long Manning captions past the
+    // 300-char guard (#101). Unescaped `*`/backticks are always markup in ebook-convert
+    // markdown (it escapes literal ones) — but literal text in pdftotext output.
+    if (markdown) stripped = stripped.replace(/(?<!\\)[*`]+/g, "");
+    stripped = stripped.trim();
+    // A markdown heading is ebook-convert's rendering of a caption-dedicated element
+    // (`<h5>Figure 1.1 Text</h5>` → `##### Figure 1.1 Text`, newer Manning EPUBs): give it
+    // the same separator-less trust the EPUB inventory gave the element (#101).
+    // Collapsed first: the relaxed form needs no emphasis gap, and the gaps would count
+    // against the 300-char guard.
+    // A line wholly wrapped in emphasis (`**Figure 2.1 Docker client and engine.**`) is a
+    // caption-styled paragraph, not prose — same trust.
+    const heading = markdown && (/^\s*#/.test(raw) || /^\s*[*_].*[*_]\s*$/.test(raw));
+    const hit = heading ? matchCaptionElement(collapseWs(stripped)) : matchCaptionLine(stripped);
+    if (hit) found.push({ start, label: hit.label, text: stripped, captionText: hit.text });
     start += raw.length + 1;
   }
   return found;
@@ -128,28 +150,42 @@ function scanCaptionLines(text: string): CaptionLine[] {
 /**
  * Find the caption line for one figure at or after `from`. Label must match; when the
  * inventory carries caption text (it usually does), the line must contain its head too —
- * a bare in-text reference ("see Figure 2.1") never carries the caption words.
+ * a bare in-text reference ("see Figure 2.1") never carries the caption words. A line
+ * whose caption text is a solid prefix of the inventory caption also counts: the spine
+ * walk joins a `<br/>`-separated credit ("Postman screenshotSource: …") that the txt puts
+ * on its own line (#101).
  */
 function findCaptionLine(lines: CaptionLine[], from: number, entry: FigureEntry): number {
   const label = entry.label ?? "";
-  const head = comparable(entry.caption ?? "").slice(0, 30);
+  const full = comparable(entry.caption ?? "");
+  // head = the first 30 chars of the ws-collapsed caption, compared ws-free
+  const head = comparable(collapseWs(entry.caption ?? "").slice(0, 30));
   for (let i = from; i < lines.length; i++) {
     const line = lines[i]!;
     if (normalizeLabel(line.label) !== normalizeLabel(label)) continue;
-    if (head.length > 0 && !comparable(line.text).includes(head)) continue;
+    if (head.length > 0 && !comparable(line.text).includes(head) && !isCaptionPrefix(line.captionText, full)) continue;
     return i;
   }
   return -1;
 }
 
+/** Shortest line caption trusted as a prefix match — shorter is too generic to anchor on. */
+const PREFIX_MIN = 12;
+
+function isCaptionPrefix(lineCaption: string, fullComparable: string): boolean {
+  const c = comparable(lineCaption);
+  return c.length >= PREFIX_MIN && fullComparable.startsWith(c);
+}
+
 /**
- * Comparison form for caption-head containment: ws-collapsed, lowercased, backslashes
+ * Comparison form for caption-head containment: whitespace-free, lowercased, backslashes
  * stripped. ebook-convert's txt escapes markdown specials (`\(A\)`, `\+`) while the
  * inventory caption is clean HTML text — an escapable char inside the 30-char head made
- * the figure silently unplaceable (book 929: Figs 2-2, 7-6).
+ * the figure silently unplaceable (book 929: Figs 2-2, 7-6). Whitespace goes entirely, not
+ * just collapsed: emphasis gaps land mid-caption (`class \`Book\`, a` → `class Book  , a`).
  */
 function comparable(s: string): string {
-  return collapseWs(s).replace(/\\/g, "").toLowerCase();
+  return s.replace(/\s+/g, "").replace(/\\/g, "").toLowerCase();
 }
 
 /** Fallback caption when the line itself wasn't found (page-boundary placement). */
