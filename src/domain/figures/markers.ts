@@ -61,11 +61,13 @@ export function injectFigureMarkers(text: string, inventory: FigureInventory, fo
   let unplaced = 0;
   let cursor = 0; // next candidate line — matches never go backwards in document order
   for (const entry of captioned) {
-    const hit = findCaptionLine(lines, cursor, entry);
-    if (hit >= 0) {
-      const line = lines[hit]!;
-      cursor = hit + 1;
-      placements.push({ entry, at: line.start, caption: line.text });
+    const hit = findCaptionLine(lines, cursor, entry, pageStarts);
+    if (hit) {
+      const line = lines[hit.index]!;
+      cursor = hit.index + 1;
+      // a layout-read caption isn't on the line's neighbour: show the label + inventory text
+      const caption = hit.byPage ? `${line.own} ${entry.caption ?? ""}` : line.text;
+      placements.push({ entry, at: line.start, caption });
       continue;
     }
     const pageStart = pageStarts[entry.page - 1];
@@ -109,6 +111,10 @@ interface CaptionLine {
   captionText: string;
   /** The physically next line — a wrapped caption's continuation (#107). */
   nextLine: string;
+  /** A label-only head ("Figure 1.5" alone): its caption text may sit elsewhere on the page. */
+  bare: boolean;
+  /** The line itself, without the next line a label-only head borrows. */
+  own: string;
 }
 
 /** Scan all lines that look like captions, with their start offsets in `text`. */
@@ -152,9 +158,9 @@ function scanCaptionLines(text: string, markdown: boolean): CaptionLine[] {
     // the next line, so compare that
     const head = hit ?? matchBareLabel(stripped);
     if (head && head.text === "") {
-      found.push({ start, label: head.label, text: `${stripped} ${nextLine}`, captionText: nextLine, nextLine: "" });
+      found.push({ start, label: head.label, text: `${stripped} ${nextLine}`, captionText: nextLine, nextLine: "", bare: true, own: stripped });
     } else if (head) {
-      found.push({ start, label: head.label, text: stripped, captionText: head.text, nextLine });
+      found.push({ start, label: head.label, text: stripped, captionText: head.text, nextLine, bare: false, own: stripped });
     }
     start += raw.length + 1;
   }
@@ -167,9 +173,16 @@ function scanCaptionLines(text: string, markdown: boolean): CaptionLine[] {
  * a bare in-text reference ("see Figure 2.1") never carries the caption words. A line
  * whose caption text is a solid prefix of the inventory caption also counts: the spine
  * walk joins a `<br/>`-separated credit ("Postman screenshotSource: …") that the txt puts
- * on its own line (#101).
+ * on its own line (#101). On a PDF, a label-only head on the figure's own page anchors it
+ * too: the inventory read that caption's text from page layout, beside or below the
+ * label, where the text stream puts it lines away (#107 follow-up).
  */
-function findCaptionLine(lines: CaptionLine[], from: number, entry: FigureEntry): number {
+function findCaptionLine(
+  lines: CaptionLine[],
+  from: number,
+  entry: FigureEntry,
+  pageStarts: number[],
+): { index: number; byPage: boolean } | null {
   const label = entry.label ?? "";
   const full = comparable(entry.caption ?? "");
   // head = the first 30 chars of the ws-collapsed caption, compared ws-free
@@ -178,9 +191,29 @@ function findCaptionLine(lines: CaptionLine[], from: number, entry: FigureEntry)
     const line = lines[i]!;
     if (normalizeLabel(line.label) !== normalizeLabel(label)) continue;
     if (head.length > 0 && !comparable(line.text).includes(head) && !isCaptionPrefix(line, full)) continue;
-    return i;
+    return { index: i, byPage: false };
   }
-  return -1;
+  if (pageStarts.length === 0) return null;
+  for (let i = from; i < lines.length; i++) {
+    const line = lines[i]!;
+    // +1: a page-first line starts on the form feed that opens its page (book 836)
+    const page = pageOf(line.start + 1, pageStarts);
+    if (page > entry.page) break;
+    if (line.bare && page === entry.page && normalizeLabel(line.label) === normalizeLabel(label)) return { index: i, byPage: true };
+  }
+  return null;
+}
+
+/** 1-based page holding text offset `at` (`pageStarts[k]` = offset where page k+1 begins). */
+function pageOf(at: number, pageStarts: number[]): number {
+  let lo = 0;
+  let hi = pageStarts.length; // count of starts <= at, by binary search
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if ((pageStarts[mid] as number) <= at) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
 }
 
 /** Shortest line caption trusted as a prefix match — shorter is too generic to anchor on. */

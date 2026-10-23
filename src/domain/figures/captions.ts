@@ -69,7 +69,7 @@ const REFERENCE_TAIL = /^[)\]},;]/u;
 const RU_REFERENCE_TEXT = /^\(?[а-яё]/u;
 // Dingbat-font separator glyphs land in the Private Use Area (book 610 prints U+F076
 // between "Рис. 1.1" and the text).
-const PUA_LEAD = /^[\uE000-\uF8FF]\s*/u;
+export const PUA_LEAD = /^[\uE000-\uF8FF]\s*/u;
 
 // Multi-line captions (#107): pdftotext breaks captions at the column edge, so the
 // scan joins continuation lines. A continuation starts lowercase or "(", or follows a
@@ -81,7 +81,7 @@ const DANGLING =
   /(?:^|\s)(?:a|an|the|of|and|or|to|for|in|on|with|by|from|at|as|into|via|its|their|that|which|и|или|в|во|на|для|с|со|по|из|к|о|об|от|при|а|но|что|как)$/iu;
 const CONTINUES = /^[a-zа-яё(]/u;
 const MAX_CONTINUATION_LINES = 3;
-const CAPTION_MAX = 300;
+export const CAPTION_MAX = 300;
 
 /** Scan extracted text (with `\f` page breaks) for captions, in document order. */
 export function scanCaptions(text: string): Caption[] {
@@ -173,13 +173,17 @@ function readCaption(lines: string[], i: number): { label: string; text: string 
     const shortSentence = TERMINAL.test(hit.text) && joined <= 1;
     if (FIGURE_WORD.test(hit.text) || !(isolated || shortSentence)) hit.text = "";
   }
-  // mark a cut caption instead of ending silently mid-clause
-  if (hit.text.length > CAPTION_MAX) hit.text = `${hit.text.slice(0, CAPTION_MAX - 1)}…`;
-  else if (DANGLING.test(hit.text)) hit.text = `${hit.text}…`;
+  hit.text = markCut(hit.text);
   return hit;
 }
 
-const FIGURE_WORD = /^(?:Figure|FIGURE|Fig\.|Рис)/u;
+/** Mark a cut caption instead of ending silently mid-clause: over the cap, or on a dangling word. */
+export function markCut(text: string): string {
+  if (text.length > CAPTION_MAX) return `${text.slice(0, CAPTION_MAX - 1)}…`;
+  return DANGLING.test(text) ? `${text}…` : text;
+}
+
+export const FIGURE_WORD = /^(?:Figure|FIGURE|Fig\.|Рис)/u;
 /** Shortest line that reads as wrapped at the column edge rather than ending a title. */
 const BLOCK_WRAP_MIN = 30;
 // What sits under a bare label besides its caption (sweep of 1037 books): page numbers and
@@ -187,11 +191,11 @@ const BLOCK_WRAP_MIN = 30;
 // sidebar admonitions ("ПРИМЕЧАНИЕ Метод…"), footnote links, lone words.
 // Starts: "Network…", "IDA Pro…", "P6 Microarchitecture…", "(a) A Four-Stage…"
 const CAPTION_START = /^(?:[A-ZА-ЯЁ][a-zа-яё]|[A-ZА-ЯЁ]+\d*[\s/-]|\([a-zа-я]\)\s)/u;
-const ADMONITION = /^(?:NOTE|TIP|WARNING|CAUTION|IMPORTANT|ПРИМЕЧАНИЕ|СОВЕТ|ВНИМАНИЕ|ПРЕДУПРЕЖДЕНИЕ)(?=\s|$)/u;
-const PAGE_LIST_TAIL = /\s\d[\d,\s–-]*$/u;
+export const ADMONITION = /^(?:NOTE|TIP|WARNING|CAUTION|IMPORTANT|ПРИМЕЧАНИЕ|СОВЕТ|ВНИМАНИЕ|ПРЕДУПРЕЖДЕНИЕ)(?=\s|$)/u;
+export const PAGE_LIST_TAIL = /\s\d[\d,\s–-]*$/u;
 
 /** True when the line under a bare label reads as caption text, not page furniture. */
-function looksLikeBlockCaption(line: string): boolean {
+export function looksLikeBlockCaption(line: string): boolean {
   return (
     CAPTION_START.test(line) &&
     !ADMONITION.test(line) &&
@@ -220,10 +224,10 @@ function previousNonBlank(lines: string[], i: number): string {
 }
 
 /** Join a wrapped line: soft hyphens and RU word breaks drop, EN compounds keep their dash. */
-function joinLine(text: string, cont: string): string {
+export function joinLine(text: string, cont: string): string {
   if (/[¬\u00ad]$/u.test(text)) return text.slice(0, -1) + cont;
   if (/[а-яё]-$/u.test(text) && /^[а-яё]/u.test(cont)) return text.slice(0, -1) + cont;
-  if (/[a-z]-$/u.test(text) && /^[a-z]/u.test(cont)) return text + cont;
+  if (/[A-Za-z]-$/u.test(text) && /^[a-z]/u.test(cont)) return text + cont;
   return `${text} ${cont}`;
 }
 

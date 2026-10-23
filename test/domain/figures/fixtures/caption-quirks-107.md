@@ -136,3 +136,67 @@ and many books put it after a blank line. Pulling that text in needs layout geom
   9 16 20 21 23 24 30 38 43 55 74 104 108 110 122 128 134 136 165 175 182 183 184 186 193 194 200 209 216 233 243 251 259 266 278 281 284 289 295 357 358 373 379 380 383 390 396 398 403 439 467 468 473 475 494 503 504 505 525 533 538 541 545 561 564 565 575 590 593 610 612 648 650 672 677 678 683 685 695 696 704 705 729 732 741 754 772 783 792 794 796 800 802 805 823 835 845 860 861 865 866 934
 - The production index was not touched. The 2026-07-27 index predates #116 too, so the pending
   full re-index (#140) covers all of this.
+
+## Phase 3 — caption text from page layout (2026-10-23)
+
+Phase 2 left 4,385 label-only Figures across PDF+EPUB. This re-run counts 4,196 over the 823
+PDFs that scanned cleanly (main @ #172, same harness, stderr drained). The text stream
+can't pair them safely: in reading order, the line under `Figure 1.2` is often diagram
+text (`TV 2 consumer`). `pdftotext -bbox-layout` geometry can. `caption-layout.ts` takes
+a line holding only `keyword label` as the anchor and reads, in this order:
+
+1. **Beside (same baseline).** The nearest line to the anchor's right, within 3 label heights,
+   with similar type size (0.75–1.3×). The lines wrapped under it in its block count too:
+   left-aligned, centered within its width (1234), or hanging back to the label's edge (938).
+   This covers Manning, Pearson, Addison-Wesley and Gray Hat: 182, 74, 802, 1234, 439, 110, 396.
+   The text gate is loose here because the position already says "caption": one word
+   (`Brokers`) and identifier or mixed-case starts (`jMock…`, `RESTful…`) pass. Bare numbers,
+   admonitions and a second label don't.
+2. **Column below.** A narrow run (≤3.5× the label's width) right under the label, flush with
+   its left edge (403 side columns) or its right edge (Wiley/Dummies 836, 371, 378). It must
+   open capitalized and run 2+ words.
+3. **Wide block below.** One self-contained block of ≤2 lines, flush left, ending a sentence
+   (Wiley 1231). A paragraph that opens under a label runs longer.
+
+If no shape reads cleanly, or two anchors for the label read differently, the Figure stays
+label-only. The layout pass runs only when the scan leaves label-only captions: one
+`-bbox-layout` run over the first–last such page, parsed only for those pages. That's +1–5 s
+on a Manning book. A failed run leaves the captions label-only and doesn't fail the inventory.
+
+Markers: a label-only head on the figure's own page anchors its marker. The marker shows
+`label + inventory caption`, not the label's neighbour line. A page-first label line starts
+on the page's form feed, so page lookup uses `start + 1`. Without that, 231 markers in
+836/378/371/772 fell back to the page boundary in the first sweep.
+
+### Sweep: every PDF in Programming Books (823 files, read-only, branch vs this change)
+
+| | before | after |
+|---|---|---|
+| captioned figures | 43,702 | 43,702 |
+| label-only figures | 4,196 | **900** |
+| books with captions recovered | — | 69 (3,296 captions) |
+| figure indexes changed | — | **0** (only caption text changes) |
+| marker page-boundary fallbacks / unplaced | 6 / 0 | 6 / 0 |
+
+One file failed both ways (1160, pdftotext exit 99). Samples, before → after:
+182 71→0, 74 129→0, 1234 68→0, 439 123→0, 110 101→0, 836 223→0, 1231 60→0,
+938 7→0, 802 28→3, 371 127→3, 403 8→1, 45 25→25.
+
+Eye check: all recovered captions in 182/74/802/1234/439/110/403/836/1231/938, plus 70 random
+ones from 60+ other books. The random ones were all real captions. 938's (Norman) long
+paragraph captions read whole up to the 300-char cap.
+
+What stays label-only, and why:
+- **No caption text printed.** Wrox 1156 (`Figure 1-1` under screenshots), RU 45 (`Рис. 7.2`).
+- **Phantom heads from Phase 2.** 371 `Figure 3-5.` ends Figure 3-6's caption
+  (`…relationship in / Figure 3-5.`). Geometry leaves it alone. Dropping it (the anchor is a
+  non-first line of another caption's block) would renumber indexes, so it's a follow-up.
+- **Shapes skipped on purpose.** Caption type much larger than the label (802 p.44, 1.43×),
+  a wrap set in code font in another block (836 `clearBoard-` / `Diplay()`, which keeps
+  `The test for…`), text that opens on another label (403 `Figure 9.12 with…`).
+
+### Re-index implications
+
+- `INVENTORY_VERSION` 4→5 and `TEXT_CACHE_VERSION` 6→7. Figure indexes don't move, so the
+  semantic index's figure rows stay valid. Figure-caption search for these 69 books still sees
+  empty captions until re-indexed (#140 covers it).

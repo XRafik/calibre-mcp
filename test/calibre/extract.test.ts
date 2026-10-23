@@ -57,9 +57,9 @@ describe("noTextReason", () => {
   });
 });
 
-describe("text cache envelope (v6, #84/#133/#134/#101/#107)", () => {
+describe("text cache envelope (v7, #84/#133/#134/#101/#107)", () => {
   it("round-trips a valid envelope", () => {
-    const env = { v: 6, backend: "pdftotext", text: "body [image #0]", markers: [{ index: 0, charOffset: 5, page: 1, caption: "c" }] };
+    const env = { v: 7, backend: "pdftotext", text: "body [image #0]", markers: [{ index: 0, charOffset: 5, page: 1, caption: "c" }] };
     expect(parseTextCacheEnvelope(JSON.stringify(env))).toEqual(env);
   });
   it("rejects a pre-marker cache payload (raw text, no envelope)", () => {
@@ -77,14 +77,14 @@ describe("text cache envelope (v6, #84/#133/#134/#101/#107)", () => {
   it("rejects a v3 envelope — cached before the PDF outline rode along (#134)", () => {
     expect(parseTextCacheEnvelope(JSON.stringify({ v: 3, backend: "pdftotext", text: "t", markers: [] }))).toBeNull();
   });
-  it("rejects a v5 envelope — PDF markers cached before the #107 caption rework renumbered figures", () => {
-    expect(parseTextCacheEnvelope(JSON.stringify({ v: 5, backend: "pdftotext", text: "t", markers: [] }))).toBeNull();
+  it("rejects a v6 envelope — PDF markers cached before layout-read captions carry no caption text", () => {
+    expect(parseTextCacheEnvelope(JSON.stringify({ v: 6, backend: "pdftotext", text: "t", markers: [] }))).toBeNull();
   });
   it("rejects an envelope missing markers", () => {
-    expect(parseTextCacheEnvelope(JSON.stringify({ v: 6, backend: "x", text: "t" }))).toBeNull();
+    expect(parseTextCacheEnvelope(JSON.stringify({ v: 7, backend: "x", text: "t" }))).toBeNull();
   });
   it("round-trips the outline and the unplaced count", () => {
-    const env = { v: 6, backend: "pdftotext", text: "t", markers: [], unplaced: 2, outline: [{ title: "Intro", page: 3, level: 1 }] };
+    const env = { v: 7, backend: "pdftotext", text: "t", markers: [], unplaced: 2, outline: [{ title: "Intro", page: 3, level: 1 }] };
     expect(parseTextCacheEnvelope(JSON.stringify(env))).toEqual(env);
   });
 });
