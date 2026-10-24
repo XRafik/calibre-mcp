@@ -144,5 +144,8 @@ export const PASSAGE_PREFIX = ACTIVE_MODEL.passagePrefix;
  * every chunk boundary moves, so v2 vectors/offsets must be rebuilt. Folded into the same
  * (unshipped) bump: a `book_meta` FTS column (stemmed title+authors on chunks/chunk_fts,
  * bm25-weighted 0.5) so the keyword half sees book identity, not just prose.
+ *
+ * v4 (#139): transformers.js 4.2.0 → 4.3.1 pins onnxruntime-node 1.30, which shifts e5
+ * vectors (cos ~0.997) and reranker logits — v3 vectors must not mix with v4 query vectors.
  */
-export const INDEX_VERSION = 3;
+export const INDEX_VERSION = 4;
