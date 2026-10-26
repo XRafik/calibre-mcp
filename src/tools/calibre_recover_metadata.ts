@@ -77,7 +77,7 @@ export const recoverMetadataTool = defineTool({
       if (isbn) {
         lookupKey = `isbn:${isbn}`;
         byIsbn = true;
-      } else if (isUsableTitle(book.title)) {
+      } else if (isUsableTitle(book.title, book.authors)) {
         lookupKey = `title:${book.title}${author ? ` / ${author}` : ""}`;
         byIsbn = false;
       } else {
