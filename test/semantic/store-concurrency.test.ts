@@ -23,9 +23,7 @@ describe("SqliteIndexStore across processes (#196)", () => {
   let dir: string;
   let file: string;
   const store = (busyMs: number) =>
-    new SqliteIndexStore(
-      loadConfig({ CALIBRE_MCP_INDEX_DIR: dir, CALIBRE_MCP_INDEX_BUSY_TIMEOUT_MS: String(busyMs) }),
-    );
+    new SqliteIndexStore(loadConfig({ CALIBRE_MCP_INDEX_DIR: dir, CALIBRE_MCP_INDEX_BUSY_TIMEOUT_MS: String(busyMs) }));
 
   beforeEach(() => {
     dir = mkdtempSync(path.join(tmpdir(), "calibre-mcp-lock-"));
@@ -52,9 +50,7 @@ describe("SqliteIndexStore across processes (#196)", () => {
     const holder = new DatabaseSync(file);
     holder.exec("BEGIN IMMEDIATE");
     const t0 = Date.now();
-    expect(() => b.replaceBook(LIB, { bookId: 2, title: "B", authors: [] }, [chunk("beta")])).toThrow(
-      /locked|busy/i,
-    );
+    expect(() => b.replaceBook(LIB, { bookId: 2, title: "B", authors: [] }, [chunk("beta")])).toThrow(/locked|busy/i);
     // Without busy_timeout this fails in ~0 ms; with it the writer waited ~300 ms first.
     expect(Date.now() - t0).toBeGreaterThanOrEqual(250);
     holder.exec("ROLLBACK");
