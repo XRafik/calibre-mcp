@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isUsableTitle, looksLikeRawFilename } from "../../../src/domain/enrich/filename-guess.js";
+import { isPlaceholderTitle, isUsableTitle, looksLikeRawFilename } from "../../../src/domain/enrich/filename-guess.js";
 
 describe("looksLikeRawFilename", () => {
   it("catches the original three shapes (digits, ASIN, file extension)", () => {
@@ -41,6 +41,18 @@ describe("looksLikeRawFilename", () => {
     expect(looksLikeRawFilename("Go Design Patterns (Mario Castro Contreras)")).toBe(false);
   });
 
+  it("catches a duplicate-download copy suffix", () => {
+    expect(looksLikeRawFilename("Test-Driven JavaScript Development (1)")).toBe(true);
+  });
+
+  it("matches the author parenthetical exactly, not by containment", () => {
+    expect(looksLikeRawFilename("Clean Code (Robert C. Martin Series)", ["Robert C. Martin"])).toBe(false);
+    expect(looksLikeRawFilename("Foo Bar (Smith)", ["John Smith"])).toBe(false);
+    expect(looksLikeRawFilename("Programming (C)", ["C"])).toBe(true);
+    // Calibre's "Unknown" author is a placeholder, never a match.
+    expect(looksLikeRawFilename("Some Title (Unknown)", ["Unknown"])).toBe(false);
+  });
+
   it("does NOT flag ordinary human titles", () => {
     expect(looksLikeRawFilename("A Good Book Title")).toBe(false);
     expect(looksLikeRawFilename("The Pragmatic Programmer")).toBe(false);
@@ -50,8 +62,19 @@ describe("looksLikeRawFilename", () => {
     expect(looksLikeRawFilename("Pro Vim")).toBe(false);
     // A parenthetical that is not the author is kept.
     expect(looksLikeRawFilename("Design Patterns (2nd Edition)", ["Eric Freeman"])).toBe(false);
+    // A bare trailing number is a volume/version, not a copy suffix.
+    expect(looksLikeRawFilename("Test-Driven JavaScript Development 2")).toBe(false);
+    expect(looksLikeRawFilename("Python 3")).toBe(false);
     // Empty title is not raw (handled by callers).
     expect(looksLikeRawFilename("")).toBe(false);
+  });
+});
+
+describe("isPlaceholderTitle", () => {
+  it("is true only for importer placeholders", () => {
+    expect(isPlaceholderTitle("Cover")).toBe(true);
+    expect(isPlaceholderTitle("book (3)")).toBe(true);
+    expect(isPlaceholderTitle("pro-vim-2014")).toBe(false);
   });
 });
 
